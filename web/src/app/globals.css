@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens, light/dark/system themes and accents are defined by session 0.02
+ * (docs/ARCHITECTURE.md → Frontend). Until then pages use no custom colors.
+ */
