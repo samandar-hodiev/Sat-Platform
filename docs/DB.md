@@ -102,6 +102,7 @@ erDiagram
     users ||--o{ auth_sessions : "signed in on"
     auth_sessions ||--o{ auth_refresh_tokens : "rotates"
     users ||--o{ password_reset_tokens : "resets with"
+    users ||--o| learner_study_profiles : "answered onboarding"
 
     users {
         uuid id PK
@@ -193,6 +194,24 @@ erDiagram
         timestamptz expires_at
         timestamptz used_at
         timestamptz created_at
+    }
+    learner_study_profiles {
+        uuid user_id PK "FK users CASCADE"
+        smallint target_score "400-1600, x10"
+        date exam_date "NULL = undecided"
+        text reason "enum, nullable"
+        timestamptz goal_saved_at
+        smallint daily_minutes "15|30|45|60|90|120"
+        smallint_array study_days "ISO 1-7"
+        timestamptz schedule_saved_at
+        smallint math_confidence "1-5"
+        smallint rw_confidence "1-5"
+        smallint prev_total_score "nullable"
+        smallint prev_math_score "nullable"
+        smallint prev_rw_score "nullable"
+        date prev_taken_on "1st of month"
+        timestamptz background_saved_at
+        timestamptz completed_at
     }
 ```
 
@@ -289,6 +308,30 @@ HMAC-SHA256 bound to the email, refresh and reset tokens as SHA-256 of 256-bit r
 Expired codes, used tokens and old revoked sessions are not purged yet; a cleanup job is a
 later decision (5.05).
 
+### `learner_study_profiles` — 2.02 (read by 2.04, 2.05; edited by 2.11)
+
+Onboarding answers (PRD §8), owned by `api/internal/onboarding` (`repository.go`). One row per
+learner, created by the first saved step (upsert). NULL is "not answered", never a default.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `user_id` | UUID PK | FK `users`, `ON DELETE CASCADE` |
+| `target_score` | SMALLINT NULL | 400–1600, multiple of 10; NOT NULL once `goal_saved_at` is set |
+| `exam_date` | DATE NULL | NULL with `goal_saved_at` set = the learner has not decided |
+| `reason` | TEXT NULL | `college_admission`, `scholarship`, `improve_score`, `practice`, `other` |
+| `daily_minutes` | SMALLINT NULL | 15, 30, 45, 60, 90, 120 (= 2+ hours) |
+| `study_days` | SMALLINT[] NULL | ISO weekdays 1 (Mon) … 7 (Sun), 1–7 items, sorted by the app |
+| `math_confidence`, `rw_confidence` | SMALLINT NULL | 1–5 |
+| `prev_total_score` | SMALLINT NULL | Earlier official SAT result, 400–1600 ×10 |
+| `prev_math_score`, `prev_rw_score` | SMALLINT NULL | Both or neither, 200–800 ×10, sum = total |
+| `prev_taken_on` | DATE NULL | First day of the (approximate) month, from 2016-03; needs a total |
+| `goal_saved_at`, `schedule_saved_at`, `background_saved_at` | TIMESTAMPTZ NULL | When each step was last saved; the step's required columns are NOT NULL once set (CHECK) |
+| `completed_at` | TIMESTAMPTZ NULL | Onboarding finished; requires all three `*_saved_at` (CHECK). Set once (`COALESCE`) |
+| `created_at`, `updated_at` | TIMESTAMPTZ | `set_updated_at()` trigger |
+
+Every app rule is also a CHECK constraint, so writes from other sessions cannot store values the
+API would reject.
+
 ## Migration log
 
 | Version | File | Session |
@@ -302,10 +345,12 @@ later decision (5.05).
 | 20261012120100 | `create_email_verification_codes` | 1.01 |
 | 20261012120200 | `create_auth_sessions` (+ `auth_refresh_tokens`) | 1.01 |
 | 20261012120300 | `create_password_reset_tokens` | 1.01 |
+| 20261012150000 | `create_learner_study_profiles` | 2.02 |
 
 ## Planned entities (PRD §3)
 
-Learner Goals, Study Plans, Study Plan Tasks, Curriculum Domains, Topics, Lessons, Questions,
+Study Plans, Study Plan Tasks, Curriculum Domains, Topics, Lessons, Questions,
 Question Versions, Practice Attempts, Mock Exams, Exam Modules, Exam Attempts, Exam Responses,
 Bookmarks, Mistake Records, AI Conversations, Subscriptions, Payments, Notifications. Each is
 created by the session that owns it (see CLAUDE.md), which also updates the ERD above.
+(Learner Goals: `learner_study_profiles`, 2.02.)

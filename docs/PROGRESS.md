@@ -13,6 +13,27 @@ Keyingi qadam:
 
 ---
 
+## 2.02-Learner · Onboarding — 2026-10-12
+Status: Done. Placement Assessment'ga o'tish — Blocked by 3.11 (sahifa yo'q; hozircha onboarding `/app` ga olib boradi).
+Qarorlar (foydalanuvchi tasdiqladi): 3 qadam (Maqsad → O'qish vaqti → Hozirgi daraja); imtihon sanasi erkin sana + "I haven't decided yet" (`exam_date: null`); onboarding majburiy — tugamaguncha `/app/*` yopiq, faqat ixtiyoriy savollar Skip qilinadi; oldingi SAT natijasi total + ixtiyoriy Math/R&W (yig'indisi totalga teng) + taxminiy oy. Standartlar: target 400–1600 (×10), kunlik vaqt 15/30/45/60/90/120+ daqiqa, ishonch 1–5, sabab — 5 ta variant (ixtiyoriy).
+Bajarildi:
+- **DB** (migration `20261012150000_create_learner_study_profiles`, dev bazaga qo'llandi): har learner'ga bitta qator, har qadamning `*_saved_at` vaqti, `completed_at`. Barcha qoidalar CHECK constraint sifatida ham bor (ball diapazoni/×10, hafta kunlari, bo'limlar birga va yig'indisi, `completed_at` faqat 3 qadam saqlangach). `docs/DB.md` — ERD, jadval tavsifi, migration log.
+- **Backend** `api/internal/onboarding/`: `store.go` (Record, Store, Profiles interfeysi), `validate.go`, `service.go` (Get, SaveGoal/Schedule/Background, Complete — idempotent; "bugun" learner'ning profil timezone'i bo'yicha), `handler.go`, `repository.go` (upsert, `Complete` bitta UPDATE bilan), `profiles.go` (`ProfileService` → `profile.Service` adapteri), `module.go`. `server.NewRouter` ga ulandi.
+- Endpointlar (`docs/API.md` → Onboarding, `openapi.yaml` tag `onboarding`): `GET /api/v1/me/onboarding`, `PUT /me/onboarding/{goal,schedule,background}`, `POST /me/onboarding/complete`. Faqat `learner`; yozish Profile Setup'siz `409 profile_setup_required`; tugatish to'liq bo'lmasa `409 onboarding_incomplete` + `missing_steps`. Saqlanmagan qadam `null` (default emas); `goal.days_until_exam` server hisoblaydi.
+- **Web** `features/onboarding/`: `api.ts`, `onboardingStore.ts` (`useOnboarding()` — bir fetch, sahifa/gate/2.04 uchun umumiy), `validation.ts`, `routes.ts` (`ONBOARDING_ROUTE`, `AFTER_ONBOARDING`), komponentlar: `OnboardingFlow` (saqlangan qadamdan davom etadi, progress indicator, Back/Continue, oxirgi qadam Finish → saqlash + complete), `GoalStep`, `ScheduleStep`, `BackgroundStep`, `ChoiceChips` (native radio/checkbox ustidagi chip'lar), `OnboardingProgress`, `StepForm` (fokus yangi qadam sarlavhasiga o'tadi), `OnboardingGate`. Sahifa `app/(setup)/setup/onboarding`. Loading/error(retry)/validatsiya holatlari, xato maydon o'zgarganda tozalanadi.
+- Minimal integratsiyalar: `features/profile/routes.ts` (`AFTER_PROFILE_SETUP` → `/setup/onboarding`, 2.01 so'ragandek) va uning 3 ta test assert'i; `(learner)/app/layout.tsx` (`ProfileGate` ichida `OnboardingGate`); `internal/server/server.go` (modul ulash).
+Testlar:
+- Go: `go vet ./...`, gofmt toza; `TEST_DATABASE_URL=…/sat_platform_test go test -race -count=1 -p 1 ./...` hammasi o'tdi. Onboarding: 33 test — validatsiya, servis (timezone "bugun", idempotent complete, tahrir tugagandan keyin), HTTP (rol, null holat, xato kodlari, noto'g'ri JSON turlari), PostgreSQL'da 11 senariy (parallel complete, CHECK constraintlar, user o'chsa cascade). Integratsiya testi bitta haqiqiy xatoni topdi (bitta bo'lim balli CHECK'dan NULL tufayli o'tib ketardi) — tuzatildi.
+- Web: `npm test` 20 fayl, 314 test (2.02: 21 ta); `lint`, `typecheck`, `format:check`, `next build` toza. Komponent testi fieldset nomi yo'qligini topdi (legend `div` ichida edi) — tuzatildi.
+- Brauzerda (dev :3000 + :8090): sign-up → Profile Setup → `/setup/onboarding`; profil tugamaganda `/setup/onboarding` → `/setup/profile`; `/app` → onboarding; bo'sh submit xatolari; 1–2-qadam saqlandi, reload 3-qadamdan davom etdi, Back saqlangan javoblarni ko'rsatdi (fokus sarlavhada); oldingi natija yig'indisi xatosi; Finish → `/app`; tugagach `/setup/onboarding` → `/app`; bazada barcha qiymatlar to'g'ri, "hali bilmayman" → `exam_date NULL`. Dark desktop va light 375px mobil (gorizontal scroll yo'q). Konsolda xato yo'q. Dev bazada test akkaunt: `onboarding202.check@example.com` (onboarding 1-qadamda qoldirilgan).
+Muammolar:
+- 8090 dagi eski API jarayoni (boshqa sessiya ishga tushirgan) yangi kod bilan qayta ishga tushirildi — dev sessionlar uzildi (`JWT_SECRET` .env da yo'q).
+- Placement (3.11) yo'q: `AFTER_ONBOARDING = "/app"`. 3.11 `features/onboarding/routes.ts` dagi qiymatni o'z yo'liga almashtiradi.
+- Javob o'zgarganda study plan qayta hisoblanmaydi — 2.05 hali yo'q; 2.05 `onboarding.Module.Service` ni o'qiydi, kerak bo'lsa 2.02 ga "o'zgardi" hook'i so'rovini yuboradi.
+- `(focus)/exam/*` layout'ida OnboardingGate yo'q (ProfileGate ham yo'q) — exam'ga faqat `/app` orqali kiriladi.
+- `type="month"` Safari desktop'da oddiy matn maydoni bo'ladi; placeholder `YYYY-MM` va server validatsiyasi buni qoplaydi.
+Keyingi qadam: 2.04 "SAT Goal" bloki `useOnboarding()` (web) yoki `GET /api/v1/me/onboarding` → `goal.target_score`, `goal.exam_date`, `goal.days_until_exam`, `completed` ni o'qiydi (`goal: null` = maqsad belgilanmagan). 2.11 Learning Preferences shu `PUT` endpointlarini ishlatadi. 2.05 algoritm kirishlari: `schedule.daily_minutes`, `schedule.study_days`, `goal`, `background` (confidence, previous_score). 3.11 `AFTER_ONBOARDING` ni placement sahifasiga ulaydi.
+
 ## 2.01-Learner · Profile setup — 2026-10-12
 Status: Done
 Qarorlar (foydalanuvchi tasdiqladi): DOB to'liq sana, kamida 13 yosh; avatar JPG/PNG/WebP, ≤5 MB, server qayta kodlaydi (≤512×512 JPEG, markazdan kvadrat, EXIF orientation qo'llanadi, metadata tashlanadi); Google akkauntlar uchun parol ixtiyoriy, email-kod akkauntlar uchun majburiy; telefon bitta maydon (default +998), server E.164 ga normallashtiradi.
@@ -85,7 +106,7 @@ Keyingi qadam:
 - Har bir yangi jadval uchun `docs/DB.md` dagi ERD va jadvallar ro'yxati yangilanadi.
 
 ## 2.04-Learner · Dashboard Home — 2026-10-12
-Status: Blocked by har bir blokning manba sessiyasi (2.02, 2.05, 2.07, 2.08, 2.09, 3.02, 3.04, 3.06, 3.08, 3.09, 3.11, 3.14)
+Status: Blocked by har bir blokning manba sessiyasi (2.05, 2.07, 2.08, 2.09, 3.02, 3.04, 3.06, 3.08, 3.09, 3.11, 3.14)
 Bajarildi: Faqat audit, kod o'zgartirilmadi.
 - Mavjud dashboard: `web/src/app/(learner)/app/page.tsx` — 2.03 qoldirgan vaqtinchalik sarlavha ("Your study overview will appear here."). API chaqiruvi, blok yoki state yo'q.
 - Backend: `api/migrations/` bo'sh (0.01 bajarilmagan, `users`/`profiles`/`user_preferences` yo'q). `docs/API.md` da faqat `/health`, `/ready`, `/openapi.yaml`. `/auth/me` va learner session yo'q (1.01 B). `/app` route guard'siz.
@@ -599,19 +620,6 @@ Muammolar: My Study Plan (rule-based reja algoritmi, daily va weekly view, vazif
 - Vazifa bog'lanishlari: lesson (3.03), practice set (3.05), review sessiyasi (2.09 mistake'lar), topic/domain (3.02). Manba hali bo'lmasa, o'sha turdagi vazifa yaratilmaydi.
 - 2.04 (Today's Study Plan bloki) va 2.07 (study plan completion) 2.05 ma'lumotini o'qiydi, shuning uchun API ularga mos bo'lishi kerak.
 Keyingi qadam: kamida 0.00 → 0.01 → 0.02 → 1.01 → 2.03 → 2.02 tugagach (tavsiya etilgan tartibda 3.10 dan keyin), 2.05 ni boshlash. Avval reja beriladi va tasdiq olinadi: algoritm qoidalari (domain vazni = zaiflik × SAT ulushi, lesson/practice/review nisbati, haftalik mock exam bormi), qayta hisoblash triggerlari (preferences o'zgarishi, o'tkazib yuborilgan kunlar, yangi diagnostik/mock natija), o'tkazib yuborilgan vazifalar keyingi kunga ko'chadimi yoki "missed" bo'lib qoladimi, kun chegarasi qaysi timezone bo'yicha, plan versiyalash (eski vazifalar va natijalar saqlanadi, faqat kelajakdagilar qayta yoziladi).
-
-## 2.02-Learner · Onboarding — 2026-10-11
-Status: Blocked by 0.00, 0.01, 0.02, 1.01, 2.01
-Bajarildi: Hech narsa. Repo tekshirildi: `api/`, `web/`, `api/migrations/` va `docs/ARCHITECTURE.md` hali mavjud emas. PRD §8 (va bog'liq §7, §9) o'qildi.
-Testlar: —
-Muammolar: Onboarding (maqsadli ball, imtihon sanasi, ixtiyoriy sabab; kunlik vaqt, haftalik kunlar, Math/R&W ishonch darajasi, oldingi SAT natijasi; progress indicator, Back/Continue/Skip, har bir qadamni serverda saqlash va keyin tahrirlash, oxirida Placement Assessment sahifasiga o'tish) quyidagilarga tayanadi:
-- 0.00: Go core (config, logger, error handler, middleware), `api/internal/<module>/` va `web/` tuzilmasi.
-- 0.01: migration tool, `users`/`profiles`/`user_preferences` jadvallari (onboarding javoblari va `onboarding_step`/`onboarding_completed_at` holati 2.02 o'z migrationi bilan qo'shiladi).
-- 0.02: design tokenlar va UI kit (stepper/progress, select, radio, slider, date picker).
-- 1.01: learner auth middleware/session.
-- 2.01: Profile setup tugagach onboarding'ga yo'naltirish va route guard (profile → onboarding → placement).
-- 3.10: Placement Assessment sahifasi hali yo'q — 2.02 faqat unga redirect qiladi (route nomi 3.10 bilan kelishiladi), sahifaning o'zini yasamaydi.
-Keyingi qadam: 0.00 → 0.01 → 0.02 → 1.01 → 2.01 tugagach, 2.02 ishini boshlash. Avval reja beriladi va quyidagi qarorlar bo'yicha tasdiq olinadi: maqsadli ball diapazoni va qadami (400–1600, 10 qadam), imtihon sanasi uchun rasmiy SAT sanalari ro'yxatimi yoki erkin sana, kunlik vaqt variantlari (masalan 15/30/45/60/90+ daqiqa), ishonch darajasi shkalasi (1–5), oldingi natija formati (total + Math/R&W bo'limlari), ma'lumot `user_preferences` da saqlanadimi yoki alohida `onboarding_responses` jadvalida (2.05 study plan shu ma'lumotni o'qiydi).
 
 ## 2.01-Learner · Profile setup — 2026-10-11
 Status: Blocked by 0.00, 0.01, 0.02, 1.01

@@ -18,6 +18,8 @@ tags:
     description: Learner authentication (1.01). Rules and error table in docs/API.md → Auth.
   - name: profile
     description: Learner profile and Profile Setup (2.01). Rules in docs/API.md → Profile.
+  - name: onboarding
+    description: Learner onboarding answers — goal, schedule, background (2.02). Rules in docs/API.md → Onboarding.
 
 components:
   securitySchemes:
@@ -149,6 +151,69 @@ components:
       properties:
         success: { type: boolean, const: true }
         data: { $ref: "#/components/schemas/LearnerProfile" }
+    OnboardingGoal:
+      type: object
+      required: [target_score, exam_date, days_until_exam, reason, saved_at]
+      properties:
+        target_score: { type: integer, minimum: 400, maximum: 1600, multipleOf: 10 }
+        exam_date: { type: [string, "null"], format: date, description: Null means the learner has not decided yet. }
+        days_until_exam: { type: [integer, "null"], description: "Days from the learner's today (profile time zone); null without an exam date; negative once passed." }
+        reason: { type: [string, "null"], enum: [college_admission, scholarship, improve_score, practice, other, null] }
+        saved_at: { type: string, format: date-time }
+    OnboardingSchedule:
+      type: object
+      required: [daily_minutes, study_days, saved_at]
+      properties:
+        daily_minutes: { type: integer, enum: [15, 30, 45, 60, 90, 120], description: 120 means "2 hours or more". }
+        study_days: { type: array, items: { type: integer, minimum: 1, maximum: 7 }, minItems: 1, maxItems: 7, description: "ISO weekdays, 1 = Monday … 7 = Sunday, sorted." }
+        saved_at: { type: string, format: date-time }
+    PreviousScore:
+      type: object
+      required: [total, math, reading_writing, taken_month]
+      properties:
+        total: { type: integer, minimum: 400, maximum: 1600, multipleOf: 10 }
+        math: { type: [integer, "null"], minimum: 200, maximum: 800, multipleOf: 10 }
+        reading_writing: { type: [integer, "null"], minimum: 200, maximum: 800, multipleOf: 10, description: With math, adds up to total. }
+        taken_month: { type: [string, "null"], pattern: "^[0-9]{4}-[0-9]{2}$", description: "YYYY-MM, March 2016 to this month." }
+    OnboardingBackground:
+      type: object
+      required: [math_confidence, reading_writing_confidence, previous_score, saved_at]
+      properties:
+        math_confidence: { type: integer, minimum: 1, maximum: 5 }
+        reading_writing_confidence: { type: integer, minimum: 1, maximum: 5 }
+        previous_score:
+          oneOf:
+            - { $ref: "#/components/schemas/PreviousScore" }
+            - { type: "null" }
+        saved_at: { type: string, format: date-time }
+    Onboarding:
+      type: object
+      required: [completed, completed_at, next_step, goal, schedule, background]
+      properties:
+        completed: { type: boolean, description: False until onboarding is finished; the web keeps the learner in onboarding. }
+        completed_at: { type: [string, "null"], format: date-time }
+        next_step: { type: [string, "null"], enum: [goal, schedule, background, null], description: First unsaved step; null when every step is saved. }
+        goal:
+          description: Null until saved.
+          oneOf:
+            - { $ref: "#/components/schemas/OnboardingGoal" }
+            - { type: "null" }
+        schedule:
+          description: Null until saved.
+          oneOf:
+            - { $ref: "#/components/schemas/OnboardingSchedule" }
+            - { type: "null" }
+        background:
+          description: Null until saved.
+          oneOf:
+            - { $ref: "#/components/schemas/OnboardingBackground" }
+            - { type: "null" }
+    OnboardingEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: "#/components/schemas/Onboarding" }
     CheckResult:
       type: object
       required: [status, latency_ms]
@@ -575,3 +640,135 @@ paths:
             image/jpeg:
               schema: { type: string, format: binary }
         "404": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/onboarding:
+    get:
+      tags: [onboarding]
+      operationId: getMyOnboarding
+      summary: The learner's onboarding answers and state
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      responses:
+        "200":
+          description: Answers so far; steps not saved yet are null.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OnboardingEnvelope" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/onboarding/goal:
+    put:
+      tags: [onboarding]
+      operationId: saveOnboardingGoal
+      summary: Save step 1 — target score, exam date, reason
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_score]
+              properties:
+                target_score: { type: integer, minimum: 400, maximum: 1600, multipleOf: 10 }
+                exam_date: { type: [string, "null"], format: date, description: "Today (learner's time zone) to 2 years ahead; null or omitted = undecided." }
+                reason: { type: [string, "null"], enum: [college_admission, scholarship, improve_score, practice, other, null] }
+      responses:
+        "200":
+          description: The onboarding state after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OnboardingEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "409": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/onboarding/schedule:
+    put:
+      tags: [onboarding]
+      operationId: saveOnboardingSchedule
+      summary: Save step 2 — daily study time and study days
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [daily_minutes, study_days]
+              properties:
+                daily_minutes: { type: integer, enum: [15, 30, 45, 60, 90, 120] }
+                study_days: { type: array, items: { type: integer, minimum: 1, maximum: 7 }, minItems: 1, maxItems: 14, description: Repeats are dropped. }
+      responses:
+        "200":
+          description: The onboarding state after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OnboardingEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "409": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/onboarding/background:
+    put:
+      tags: [onboarding]
+      operationId: saveOnboardingBackground
+      summary: Save step 3 — confidence and an earlier SAT result
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [math_confidence, reading_writing_confidence]
+              properties:
+                math_confidence: { type: integer, minimum: 1, maximum: 5 }
+                reading_writing_confidence: { type: integer, minimum: 1, maximum: 5 }
+                previous_score:
+                  description: Optional; null or omitted clears it.
+                  oneOf:
+                    - type: object
+                      required: [total]
+                      properties:
+                        total: { type: integer, minimum: 400, maximum: 1600, multipleOf: 10 }
+                        math: { type: [integer, "null"], minimum: 200, maximum: 800, multipleOf: 10 }
+                        reading_writing: { type: [integer, "null"], minimum: 200, maximum: 800, multipleOf: 10 }
+                        taken_month: { type: [string, "null"], pattern: "^[0-9]{4}-[0-9]{2}$" }
+                    - { type: "null" }
+      responses:
+        "200":
+          description: The onboarding state after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OnboardingEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "409": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/onboarding/complete:
+    post:
+      tags: [onboarding]
+      operationId: completeOnboarding
+      summary: Finish onboarding (every step saved; idempotent)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      responses:
+        "200":
+          description: The finished onboarding.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OnboardingEnvelope" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "409": { $ref: "#/components/responses/AuthError" }

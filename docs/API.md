@@ -112,6 +112,7 @@ New codes (e.g. `PLAN_REQUIRED` for Premium gating in 3.13) are added to `apperr
 | GET | `/ready` | – | 0.00 | Readiness: PostgreSQL answers (503 otherwise) |
 | GET | `/api/v1/openapi.yaml` | – | 0.00 | OpenAPI 3.1 contract |
 | … | `/api/v1/me/profile*`, `/api/v1/me/avatar`, `/api/v1/media/avatars/*` | Bearer / – | 2.01 | Learner profile (below) |
+| … | `/api/v1/me/onboarding*` | Bearer | 2.02 | Learner onboarding answers: goal, schedule, background (below) |
 
 ### Auth — learner (1.01)
 
@@ -248,3 +249,74 @@ Go: `profile.GooglePrefiller` implements `auth.ProfilePrefiller` (fills empty na
 Google learner); `profile.AuthAccounts` adapts `auth.Service`. The upload route has its own body
 limit through `middleware.BodyLimitWithRoutes`.
 
+### Onboarding — learner (2.02)
+
+Status: live (`api/internal/onboarding`, mounted in `server.NewRouter` after profile). Also in
+`openapi.yaml` (tag `onboarding`). Learner role only (`403` for other roles). PRD §8.
+
+Three steps, each saved on its own and editable any time, also after onboarding is finished
+(Learning Preferences, 2.11, uses the same `PUT`s). `POST /complete` ends onboarding; the web then
+continues to Placement (3.11; until it exists, `/app`). The web blocks `/app/*` until `completed`.
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| GET | `/api/v1/me/onboarding` | Bearer | Current answers and state (works before Profile Setup; all steps `null`) |
+| PUT | `/api/v1/me/onboarding/goal` | Bearer | Step 1: target score, exam date, reason |
+| PUT | `/api/v1/me/onboarding/schedule` | Bearer | Step 2: daily minutes, study days |
+| PUT | `/api/v1/me/onboarding/background` | Bearer | Step 3: confidence, earlier SAT result |
+| POST | `/api/v1/me/onboarding/complete` | Bearer | Finish (every step saved). Idempotent: keeps the first `completed_at` |
+
+```jsonc
+// every endpoint → 200. A step is null until saved: "not set" is never a default value.
+{
+  "completed": false,
+  "completed_at": null,                    // RFC 3339 once finished
+  "next_step": "schedule",                 // first unsaved step: goal | schedule | background; null when all saved
+  "goal": {
+    "target_score": 1450,                  // 400–1600, steps of 10
+    "exam_date": "2027-03-13",             // null = the learner has not decided yet
+    "days_until_exam": 151,                // from the learner's today (profile time zone); null without a date; negative once passed
+    "reason": "scholarship",               // college_admission | scholarship | improve_score | practice | other | null
+    "saved_at": "2026-10-12T09:00:00Z"
+  },
+  "schedule": null,                        // { "daily_minutes": 45, "study_days": [1, 3, 5], "saved_at": … }
+  "background": null                       // { "math_confidence": 3, "reading_writing_confidence": 4,
+                                           //   "previous_score": { "total": 1200, "math": 600, "reading_writing": 600, "taken_month": "2026-05" } | null,
+                                           //   "saved_at": … }
+}
+
+// PUT /me/onboarding/goal
+{ "target_score": 1450, "exam_date": "2027-03-13", "reason": null }
+// PUT /me/onboarding/schedule
+{ "daily_minutes": 45, "study_days": [5, 1, 3] }
+// PUT /me/onboarding/background
+{ "math_confidence": 3, "reading_writing_confidence": 4,
+  "previous_score": { "total": 1200, "math": 600, "reading_writing": 600, "taken_month": "2026-05" } }
+```
+
+Rules (all field errors come back at once in `details.fields`; earlier-score fields as
+`previous_score.<field>`):
+
+- `target_score`: required, 400–1600, multiple of 10.
+- `exam_date`: `YYYY-MM-DD`, from the learner's today (profile time zone) to 2 years ahead; `null`
+  or omitted = undecided.
+- `reason`: optional, one of the values above.
+- `daily_minutes`: required, one of 15, 30, 45, 60, 90, 120 (120 = "2+ hours").
+- `study_days`: required, ISO weekdays 1 (Mon) … 7 (Sun), at least one; repeats dropped, sorted.
+- `math_confidence`, `reading_writing_confidence`: required, 1–5.
+- `previous_score`: optional (`null` = none / skipped; saving without it clears it). `total`
+  required 400–1600 ×10; `math` and `reading_writing` optional but together, 200–800 ×10, adding
+  up to `total`; `taken_month` optional `YYYY-MM`, March 2016 (1600 scale) to this month.
+- Each `PUT` replaces the whole step (omitted optional fields become `null`).
+
+| Case | Status / code | Notes |
+| --- | --- | --- |
+| Profile Setup not finished (writes) | `409 CONFLICT` | `details.reason: "profile_setup_required"` |
+| `complete` before every step is saved | `409 CONFLICT` | `details.reason: "onboarding_incomplete"`, `details.missing_steps: ["schedule", …]` |
+| Invalid fields | `422 VALIDATION_ERROR` | `details.fields.<field>` |
+| Malformed JSON, wrong types (e.g. `"1400"`, `1400.5`) | `400 BAD_REQUEST` | |
+| Session ended / account gone | `401 UNAUTHORIZED` | |
+
+Go: other modules read the answers with `onboarding.Module.Service.Get(ctx, userID)` (study plan
+2.05, dashboard 2.04); `onboarding.ProfileService` adapts `profile.Service` (Profile Setup done,
+time zone). Web: `useOnboarding()` from `@/features/onboarding` (one fetch per session, shared).

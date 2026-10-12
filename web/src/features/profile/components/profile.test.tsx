@@ -107,7 +107,7 @@ describe("ProfileSetupForm", () => {
     await user.type(screen.getByLabelText(/Confirm password/), "correct horse");
     await user.click(screen.getByRole("button", { name: "Continue" }));
 
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/app"));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/setup/onboarding"));
     expect(mocked.completeProfileSetup).toHaveBeenCalledWith({
       first_name: "Ali",
       last_name: "Valiyev",
@@ -172,7 +172,7 @@ describe("ProfileSetupForm", () => {
     render(<ProfileSetupForm userId="u1" profile={profile({ password_required: false })} />);
     const user = await fillRequired();
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/app"));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/setup/onboarding"));
   });
 
   it("shows a form error when the network fails", async () => {
@@ -272,6 +272,6 @@ describe("ProfileSetup page", () => {
   it("moves on when setup is already done", async () => {
     mocked.fetchProfile.mockResolvedValue(profile({ profile_completed: true }));
     render(<ProfileSetup />);
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/app"));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/setup/onboarding"));
   });
 });

@@ -22,6 +22,7 @@ import (
 	"github.com/samandar-hodiev/sat-platform/api/internal/health"
 	"github.com/samandar-hodiev/sat-platform/api/internal/httpx"
 	"github.com/samandar-hodiev/sat-platform/api/internal/middleware"
+	"github.com/samandar-hodiev/sat-platform/api/internal/onboarding"
 	"github.com/samandar-hodiev/sat-platform/api/internal/platform/ratelimit"
 	"github.com/samandar-hodiev/sat-platform/api/internal/platform/storage"
 	"github.com/samandar-hodiev/sat-platform/api/internal/profile"
@@ -102,6 +103,15 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 			return nil, fmt.Errorf("profile module: %w", err)
 		}
 		profileModule.RegisterRoutes(v1, authModule.Authenticate())
+
+		onboardingModule, err := onboarding.NewModule(onboarding.Deps{
+			Store:    onboarding.NewPostgresStore(d.DB),
+			Profiles: onboarding.ProfileService{Profile: profileModule.Service},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("onboarding module: %w", err)
+		}
+		onboardingModule.RegisterRoutes(v1, authModule.Authenticate())
 	}
 
 	return r, nil
