@@ -509,19 +509,16 @@ Muammolar: Curriculum (rasmiy 8 ta SAT domain: Math — Algebra, Advanced Math, 
 - Iste'molchilar: 3.03 (lesson → topic), 3.05 (savol → domain/topic), 3.07 (domain distribution), 3.10, 3.11, 2.05, 2.07, 2.08, 2.09, 4.04 domain/topic ID'lariga FK orqali tayanadi. Shuning uchun taksonomiya kontrakti barqaror bo'lishi kerak.
 Keyingi qadam: 0.00 → 0.01 → 0.02 → 1.01 → 1.02 → 2.03 → 4.01 → 3.01 tugagach, 3.02 ni boshlash. Avval reja beriladi va tasdiq olinadi: 8 domain qat'iy (seed, Owner faqat nom/tavsif/tartibni tahrirlaydi) yoki to'liq CRUD; subtopic ierarxiyasi (bitta `topics` jadvali + `parent_id`, maksimal chuqurlik 2) vs alohida `subtopics` jadvali; stabil `slug` (URL va AI/import uchun); tartiblash (`sort_order` + reorder endpointi); topic arxivlanganda unga bog'langan lesson/savollar bilan nima bo'ladi (soft delete, hard delete taqiqlanadi); Learner katalogida topic bo'yicha progress ko'rsatilishi 3.04/2.07 bilan kelishiladi.
 
-## 3.01-Learner & Owner · Content CMS — 2026-10-11
-Status: Blocked by 0.00, 0.01, 0.02, 1.02, 4.01 (Learner tomoni uchun qisman 1.01)
-Bajarildi: Hech narsa. Repo tekshirildi: `api/`, `web/`, `api/migrations/` va `docs/ARCHITECTURE.md` hali mavjud emas. PRD §22 (22.1 Status, 22.3 Navigation; 22.2 Lesson Editor 3.03 ga tegishli) o'qildi.
+## 3.01-Learner & Owner · Content CMS — 2026-10-12
+Status: Blocked by 1.02, 4.01 (0.00, 0.01, 0.02, 1.01 endi Done)
+Bajarildi: Hech narsa (kod yozilmadi). 2.04 sessiyasidan yo'naltirilgan "3.01 ni boshlash" so'rovi bo'yicha repo qayta tekshirildi: 0.00, 0.01, 0.02, 1.01, 2.01, 2.02, 2.03 Done. `api/internal/` da owner auth/RBAC moduli yo'q, `web/src/app/` da `(owner)` route group va owner layout yo'q. PRD §22 o'qildi.
 Testlar: —
-Muammolar: Content CMS (Draft → In Review → Published → Archived workflow, CMS skeleti va accordion navigatsiya, preview; Learner faqat Published kontentni ko'radi) quyidagilarga tayanadi:
-- 0.00: Go core (config, logger, error handler, middleware), `api/internal/<module>/` va `web/` tuzilmasi. Umumiy workflow paketi (status enum, ruxsat etilgan o'tishlar, published-only filter helper) shu tuzilmaga joylashadi.
-- 0.01: migration tool va `audit_logs` jadvali. Status ustuni/umumiy jadval 3.01 o'z migrationi bilan qo'shiladi.
-- 0.02: design tokenlar va UI kit (accordion, status badge, tabs, confirm dialog, preview frame).
-- 1.02: owner auth, RBAC middleware (kim publish/approve qila oladi) va audit yozish helperi (har bir status o'tishi audit logga yoziladi).
-- 4.01: owner layout va sidebar — CMS sahifasi shu layout ichida, sidebar'dagi "Content" havolasi.
-- 1.01: Learner tomonidagi published-only endpointlar auth talab qilsa, learner middleware.
-- Iste'molchilar: 3.02 (curriculum), 3.03 (lessons), 3.05 (questions), 3.07 (mock exams), 3.10 (formulas), 4.05 (AI drafts) shu workflow va CMS skeletiga o'z bo'limlarini ulaydi. Shuning uchun kontrakt ular uchun qayta ishlatiladigan bo'lishi kerak; 3.01 ularning editorlarini yasamaydi.
-Keyingi qadam: 0.00 → 0.01 → 0.02 → 1.01 → 1.02 → 2.03 → 4.01 tugagach (tavsiya etilgan tartibda 2.02 dan keyin), 3.01 ni boshlash. Avval reja beriladi va tasdiq olinadi: workflow modeli (har bir kontent jadvalida `status` + umumiy Go paket vs polimorf `content_items` jadvali), ruxsat etilgan o'tishlar (Published → Draft qaytadimi yoki Published tahriri yangi versiya/draft nusxa yaratadimi — 3.05/3.07 versiyalash bilan kelishiladi; Archived → Draft tiklash), "In Review" ni kim tasdiqlaydi (1.02 rollari; bitta owner bo'lsa review majburiymi), preview usuli (owner-only preview route vs muddatli preview token), status o'tishlari tarixi (`content_status_history` jadvali vs faqat audit log), scheduled publish kerakmi, accordion holati (ochiq bo'limlar localStorage'da saqlanadimi).
+Muammolar: 3.01 ning asosiy qismi Owner tomonida va quyidagilarsiz yozib bo'lmaydi:
+- 1.02: status o'tishi (submit for review, approve, publish, archive) Owner endpointlari — CLAUDE.md bo'yicha backendda RBAC bilan himoyalanishi va audit logga yozilishi shart. RBAC middleware va audit helper hali yo'q; himoyasiz endpoint yoki vaqtinchalik fake guard yozilmaydi.
+- 4.01: CMS skeleti (accordion navigatsiya, kontent ro'yxatlari, preview) owner layout va sidebar ichida joylashadi.
+- Dependency'siz qism — umumiy workflow paketi (`api/internal/content/workflow`: status enum, ruxsat etilgan o'tishlar, published-only filter helper, migration'dagi status CHECK) — 1.02 ni kutmasdan qilinishi mumkin, lekin avval quyidagi qarorlar bo'yicha foydalanuvchi tasdig'i kerak.
+- Iste'molchilar: 3.02, 3.03, 3.05, 3.07, 3.10, 4.05 shu workflow va CMS skeletiga ulanadi; 3.01 ularning editorlarini yasamaydi.
+Keyingi qadam: 1.02 → 4.01 tugagach 3.01 ni boshlash (yoki foydalanuvchi ruxsat bersa, avvalroq faqat workflow paketi). Tasdiqlanadigan qarorlar: workflow modeli (har bir kontent jadvalida `status` + umumiy Go paket — tavsiya, vs polimorf `content_items` jadvali), ruxsat etilgan o'tishlar (Published tahriri yangi draft versiya yaratadimi — 3.05/3.07 versiyalash bilan kelishiladi; Archived → Draft tiklash), "In Review" majburiymi (bitta owner bo'lsa Draft → Published to'g'ridan-to'g'ri), preview (owner-only preview route — tavsiya, vs muddatli token), status tarixi (`content_status_history` jadvali vs faqat audit log), scheduled publish (MVP'da yo'q — tavsiya), accordion holati (localStorage).
 
 ## 2.11-Learner · Settings & Appearance — 2026-10-11
 Status: Blocked by 0.00, 0.01, 0.02, 1.01, 2.03 (Learning Preferences uchun 2.02, 2.05; Notifications uchun 3.13; Subscription tab uchun 3.12)
