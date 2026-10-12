@@ -13,6 +13,138 @@ Keyingi qadam:
 
 ---
 
+## 2.01-Learner · Profile setup — 2026-10-12
+Status: Done
+Qarorlar (foydalanuvchi tasdiqladi): DOB to'liq sana, kamida 13 yosh; avatar JPG/PNG/WebP, ≤5 MB, server qayta kodlaydi (≤512×512 JPEG, markazdan kvadrat, EXIF orientation qo'llanadi, metadata tashlanadi); Google akkauntlar uchun parol ixtiyoriy, email-kod akkauntlar uchun majburiy; telefon bitta maydon (default +998), server E.164 ga normallashtiradi.
+Bajarildi:
+- **Backend** `api/internal/profile/`: `validate.go` (ism, telefon, DOB 13+, IANA timezone), `avatar.go` (tur baytlardan, 40 MP / 12000 px chegarasi, EXIF orientation, crop+scale, JPEG), `store.go`/`repository.go` (`profiles` upsert; setup bitta statement'da `WHERE profile_completed_at IS NULL`; parol bilan bitta tranzaksiyada), `service.go`, `handler.go`, `accounts.go` (`AuthAccounts` adapteri, `GooglePrefiller` → `auth.ProfilePrefiller`), `module.go`.
+- Endpointlar (`docs/API.md` → Profile, `openapi.yaml` tag `profile`): `GET /api/v1/me/profile`, `PUT /api/v1/me/profile/setup` (bir marta, keyin 409), `POST|DELETE /api/v1/me/avatar` (multipart `file`, learner'ga soatiga 20), `GET /api/v1/media/avatars/:user/:file` (public, 128-bit tasodifiy URL, immutable cache). Faqat `learner` roli.
+- 1.01 bilan kelishib qo'shildi: `auth.Service.Account` (HasGoogle), `SetInitialPasswordTx` + `auth.PgxTx`, `ProfilePrefiller` (Google ismi prefill).
+- **Web** `features/profile/`: `api.ts`, `validation.ts`, `profileStore.ts` (`useLearnerProfile` — bitta fetch, setup/shell/gate o'rtasida umumiy), `AvatarPicker`, `ProfileSetupForm`, `ProfileSetup`, `ProfileGate`, `SignOutButton`. Sahifa `app/(setup)/setup/profile` (`(setup)` layout: `SessionBoundary`, brand, theme, Sign out). Loading/error/validatsiya holatlari, email read-only, parol maydonlari `password_required`/`has_password` bo'yicha, timezone brauzerdan.
+- Minimal integratsiyalar: `middleware.BodyLimitWithRoutes` (0.00, `BodyLimit` imzosi o'zgarmadi), `server.Deps.Storage` + wiring (`server.go`), `cmd/server/main.go` (`storage.NewLocal`), `lib/api/client.ts` (FormData → multipart), `components/ui/Avatar.tsx` (`xl` o'lcham), `proxy.ts` (`/setup/*` guard), `(learner)/app/layout.tsx` (`ProfileGate`), `learner-shell/account.ts` (profil ismi va avatar), `docs/DB.md` (profiles izohlari).
+- Dependency: `golang.org/x/image` (WebP decode, CatmullRom).
+Testlar:
+- Go: `go vet ./...` toza; `TEST_DATABASE_URL=…/sat_platform_test go test -race -count=1 -p 1 ./...` hammasi o'tdi (profile: validatsiya, avatar, servis, HTTP, PostgreSQL'da 17 senariy — rollback, parallel setup bir marta, parol profil tranzaksiyasida; middleware: per-route body limit).
+- Web: `npm test` 18 fayl, 293 test (2.01: 31 ta); `lint`, `typecheck`, `format:check`, `next build` toza.
+- Brauzerda (dev, :3000 + :8090): sign-up → `/setup/profile`; `/app` → setup'ga qaytaradi; avatar upload (600×400 → 400×400, ko'rinadi); 13 yoshdan kichik rad etildi; saqlangach `/app`, header'da "Ali Valiyev" va avatar; `/setup/profile` endi `/app` ga o'tkazadi; bazada E.164 telefon, Asia/Tashkent, argon2id parol. 375px mobil (gorizontal scroll yo'q) va dark rejim. Konsolda xato yo'q. Dev bazada test akkauntlar: `profile201.check@example.com`, `profile201.mobile@example.com`.
+Muammolar:
+- 8090 dagi eski API jarayoni (boshqa sessiya ishga tushirgan) yangi kod bilan qayta ishga tushirildi — dev sessionlar uzildi (`JWT_SECRET` .env da yo'q).
+- `AFTER_PROFILE_SETUP` hozircha `/app` — onboarding sahifasi (2.02) yo'q. 2.02 `features/profile/routes.ts` dagi qiymatni o'z yo'liga almashtiradi va kerak bo'lsa `/app` uchun o'z gate'ini qo'shadi.
+- Server field xabarlari bo'lak ko'rinishida ("is required"); web ularni gapga aylantiradi. Forma asosan klient validatsiyasiga tayanadi.
+- Production storage (S3) yo'q — local driver (5.05). Eski avatar fayli o'chirilmay qolsa (storage xatosi) — faqat warn log, tozalash job'i yo'q.
+- Exam (`/exam/*`) layout'ida ProfileGate yo'q — exam'ga faqat `/app` orqali kiriladi.
+Keyingi qadam: 2.02 onboarding (`AFTER_PROFILE_SETUP`); 2.04 learner ismini `useLearnerProfile()` (web) yoki `GET /api/v1/me/profile` → `first_name` dan oladi; 2.10 profil tahriri shu modulga `PATCH /me/profile` qo'shadi (setup endpointi qayta ishlatilmaydi), avatar endpointlari tayyor.
+
+## 1.01-Auth · Learner — 2026-10-12
+Status: Done. Haqiqiy Google client ID (foydalanuvchi Google Cloud'da yaratadi) va production email provayderi (5.05) — sozlama, kod emas.
+Qarorlar (foydalanuvchi tasdiqladi): 15 daqiqalik JWT access token (HS256) va rotating opaque refresh token (`docs/AUTHENTICATION.md`); web'da refresh token HttpOnly cookie'da, mobil'da secure storage'da; email hozircha dev `log` driver. PRD §7 bo'yicha sign-up'da parol so'ralmaydi (2.01 Profile Setup'da).
+Bajarildi:
+- **Go building blocks** (`api/internal/auth`): `password.go` (Argon2id OWASP, PHC, rehash, timing uchun dummy), `tokens.go` (HS256 JWT, opaque token + SHA-256), `codes.go` (6 raqam, email bilan bog'langan HMAC, TTL 10 daqiqa, 5 urinish, 60 s cooldown, kuniga 10), `google.go` (ID token verifier, JWKS cache, kid rotatsiyasi, Google ishlamay qolsa ma'lum kalit), `email.go`. `platform/mailer` (`Mailer` + dev `Log`, production'da ishlamaydi).
+- **Servis va HTTP**: `store.go` (Store/Tx), `service.go` (sign-up start/verify — yangi va mavjud email uchun bir xil javob; sign-in — bir xil xato va timing, email bo'yicha limit; Google — `sub` bo'yicha, birinchi marta email bilan bog'lanadi; refresh rotation + 30 s grace + reuse'da session bekor; logout; forgot/reset — hech narsani oshkor qilmaydi, reset barcha sessionlarni yopadi; me; owner/suspended learner yo'lidan kira olmaydi), `handler.go` (`/api/v1/auth/*`, har birida per-IP limit, `Authenticate` + `CurrentUser`), `module.go`, `repository.go` (PostgreSQL, `FOR UPDATE` lock'lar, noto'g'ri UUID → not found).
+- **DB** (migrationlar, `make migrate-up` dev bazaga qo'llandi): `user_identities`, `email_verification_codes`, `auth_sessions` + `auth_refresh_tokens`, `password_reset_tokens`.
+- **Config**: `JWT_SECRET` (production'da majburiy, dev'da bo'sh bo'lsa random), `AUTH_*_TTL`, `GOOGLE_CLIENT_IDS`, `MAIL_DRIVER` (`log` | `disabled`, production'da default `disabled`). `.env.example` va `web/.env.example` (`NEXT_PUBLIC_GOOGLE_CLIENT_ID`).
+- **Ulash**: `server.Deps.DB` + `server.NewRouter` auth modulini ulaydi, `cmd/server` pool'ni beradi. `openapi.yaml` ga 9 ta auth yo'li (tag `auth`).
+- **Web**: sahifalar `/auth/sign-in`, `/auth/sign-up` (email → kod → yangi: `/setup/profile`, mavjud: `/app`), `/auth/forgot-password`, `/auth/reset-password`; faqat 0.02 tokenlari va UI kit. `/api/session/[...action]` (refresh token cookie'da, CSRF: `X-Session-Request` + Origin), `features/auth/session.ts` (xotiradagi access token, single-flight refresh, `withAuth`, `useSession`, `signOut`), `src/proxy.ts` (`/app/*`, `/exam/*` guard, `?next=`), `SessionBoundary`, Google Identity Services tugmasi (client ID bo'lmasa halol "not set up" xabari).
+- **Boshqa sessiyalar fayllarida minimal integratsiya**: `(learner)/app/layout.tsx` va `(focus)/exam/layout.tsx` → `SessionBoundary`; `learner-shell/account.ts` → `useShellAccount()` haqiqiy session'dan (ism hozircha email'ning "@" dan oldingi qismi; 2.01 profil ismiga almashtiradi); 0.00 `config_test.go` (production holatiga `JWT_SECRET`); 0.01 `schema_integration_test.go` — "down 1" tekshiruvi jadval nomi o'rniga versiya bo'yicha (har yangi migrationda buzilmasligi uchun, maqsadi o'zgarmadi).
+- **2.01 so'rovi bo'yicha (2026-10-12):** `(*Service).SetInitialPassword(ctx, userID, password)` va `SetInitialPasswordTx(ctx, auth.PgxTx(tx), userID, password)` — paroli yo'q akkauntga birinchi parol (policy + Argon2id; parol bor bo'lsa `409 CONFLICT`, user yo'q bo'lsa `404`); `auth.PgxTx(pgx.Tx)` boshqa modul tranzaksiyasiga qo'shilish uchun. Google prefill: `auth.ProfilePrefiller` interfeysi (`PrefillFromGoogle(ctx, userID, GoogleProfile{FirstName, LastName})`) — faqat yangi Google learner uchun, xatosi sign-in'ni to'xtatmaydi (log). Auth `profiles` jadvaliga o'zi yozmaydi (ARCHITECTURE: modul boshqa modul jadvaliga tegmaydi) — 2.01 implementatsiya qiladi, `server.NewRouter` da `auth.Deps.ProfilePrefiller` ga ulanadi. `GoogleIdentity` ga `GivenName`/`FamilyName` qo'shildi. Kirish usullari: `(*Service).Account(ctx, userID) (Account, error)` — `Account{User, HasGoogle}`, `HasPassword()`; `GET /auth/me` endi `user.has_google` ham qaytaradi.
+- Hujjatlar: `docs/API.md` → "Auth — learner (1.01)", `docs/DB.md` → ERD, "Auth tables", migration log, `docs/AUTHENTICATION.md` → "Web session as built".
+Testlar: Go — `go vet`, gofmt toza; `TEST_DATABASE_URL=…/sat_platform_test go test -race -count=1 -p 1 ./...` hammasi o'tdi (auth: unit + HTTP + 20 ta servis senariysi haqiqiy PostgreSQL'da, suspended/deleted, session client info). Web — `npm test` 15 fayl, 262 test (auth: 64), `lint`, `typecheck`, `format:check`, `next build` toza. Brauzerda to'liq oqim: `/app/practice` → sign-in (`?next=`); sign-up → kod (dev log) → `/setup/profile`; `/app` session'ni cookie'dan tiklaydi, header'da `e2e.learner`; Sign out → bazada session `revoked_at`, `/app` yana sign-in'ga. Header'siz session so'rovi 403. Dev bazada test akkaunt qoldi: `e2e.learner@example.com`.
+Muammolar:
+- Production'da `TRUSTED_PROXIES` ga web server kiritilishi kerak (5.05), aks holda web foydalanuvchilar bitta per-IP limitni bo'lishadi.
+- Production email provayderi yo'q — `MAIL_DRIVER=disabled` da sign-up kodi va reset 503 (5.05).
+- Refresh token reuse'da audit log (1.02 helper) va xavfsizlik bildirishnomasi (3.14) yo'q — hozircha warn log.
+- Eskirgan kodlar/tokenlar/sessionlar tozalanmaydi (cleanup job — 5.05).
+- `JWT_SECRET` dev `.env` da yo'q — API har restartda sessionlarni tugatadi. Doimiy sessiya kerak bo'lsa `.env` ga `openssl rand -hex 32` qiymatini qo'shing.
+- 2.01 diqqatiga: `/setup/profile` yo'li `web/src/features/auth/routes.ts` da; parolni o'rnatish uchun API kerak bo'lsa (`has_password: false` foydalanuvchilar) — 1.01 ga so'rov yuboring.
+Keyingi qadam: Google Cloud'da OAuth client (web, keyin Android/iOS) yaratib `GOOGLE_CLIENT_IDS` va `NEXT_PUBLIC_GOOGLE_CLIENT_ID` ni to'ldirish; 1.02 owner auth shu modul ustiga quriladi (`Authenticate`, sessions jadvali); boshqa modullar learner route'larini `authModule.Authenticate()` bilan himoyalaydi.
+## 0.01-Foundation · Database & Migrations — 2026-10-12
+Status: Done
+Qarorlar (foydalanuvchi tasdiqladi): golang-migrate kutubxona sifatida, `cmd/migrate` ichiga embed qilingan. API ishga tushganda migration avtomatik ishlamaydi, u alohida qadam.
+Bajarildi:
+- Migrationlar (`api/migrations/`, har biri `BEGIN…COMMIT` va aniq `down` bilan):
+  - `set_updated_at()` umumiy trigger funksiyasi.
+  - `users`: lowercase email CHECK, `deleted_at IS NULL` bo'yicha partial unique, `password_hash` NULL bo'lishi mumkin, `role` learner/owner, `status` active/suspended, `(role, created_at)` indeksi.
+  - `profiles`: PK `user_id` cascade, E.164 phone, timezone, `profile_completed_at`.
+  - `user_preferences`: theme/accent/density/motion 0.02 qiymatlari bilan, `sidebar_collapsed`.
+  - `audit_logs`: append-only trigger UPDATE/DELETE/TRUNCATE ni rad etadi (42501). Faqat user o'chirilganda `actor_user_id → NULL` ga ruxsat bor. `entity.verb` action CHECK, JSONB object metadata, 4 ta filter indeksi.
+- Go: `internal/platform/migrate` (Up/Down/DownAll/Force/Status, fayl nomlari va up/down juftlarini tekshirish, URL xatoda chiqmaydi), `cmd/migrate` (`up | down [n] | status | force | create <name>`), `migrations/embed.go`, `config.DatabaseURL()` (faqat `DATABASE_URL`, JWT va boshqa sozlamalarsiz).
+- Makefile: `migrate-up`, `migrate-down [n=]`, `migrate-status`, `migrate-create name=`.
+- Hujjatlar: `docs/DB.md` (tool, buyruqlar, mermaid ERD, jadvallar tavsifi, migration log), `ARCHITECTURE.md` (layout, decision #9), `DEVELOPMENT.md`, `api/migrations/README.md`.
+- Dependency: `github.com/golang-migrate/migrate/v4` v4.20.1.
+- Lokal `sat_platform` bazasiga `make migrate-up` qo'llandi (5 ta migration). Qayta `up` hech narsa o'zgartirmaydi.
+Testlar: `go test -race` va `TEST_DATABASE_URL` (sat_platform_test) bilan quyidagilar o'tdi:
+- `cmd/migrate`: create va argumentlar tekshiruvi.
+- `internal/platform/migrate`: fayl validatsiyasi, BEGIN/COMMIT, up → down 1 → down all → up, qayta `up` ma'lumotni saqlashi.
+- Schema constraintlari (11 subtest): email normallashtirish, role/status, soft-delete'dan keyin emailni qayta ishlatish, updated_at trigger, profiles/preferences CHECKlar, cascade, audit append-only va SET NULL.
+- `internal/config` o'tdi. 0.01 paketlarida `go vet` va gofmt toza.
+- To'liq `go test ./...` da faqat `internal/auth` build xatosi bor (`NewCode redeclared`, `store.go`). Bu 1.01 sessiyasining hozir yozilayotgan kodi, 0.01 ga aloqasi yo'q.
+Muammolar: `profiles.timezone` IANA nomini DB tekshirmaydi (CHECK subquery qila olmaydi), API `time.LoadLocation` bilan tekshiradi. Retention purge kerak bo'lsa (`audit_logs`), alohida migration va qaror kerak. Commit qilinmadi.
+Keyingi qadam:
+- 1.01 B bosqichi `users` ga tayanadi. Auth jadvallari `make migrate-create name=create_auth_sessions` bilan qo'shiladi.
+- 2.01 → `profiles` (upsert), 2.11 → `user_preferences` va wallpaper/notification ustunlari, 1.02 → audit helper va owner seed.
+- Har bir yangi jadval uchun `docs/DB.md` dagi ERD va jadvallar ro'yxati yangilanadi.
+
+## 2.04-Learner · Dashboard Home — 2026-10-12
+Status: Blocked by har bir blokning manba sessiyasi (2.02, 2.05, 2.07, 2.08, 2.09, 3.02, 3.04, 3.06, 3.08, 3.09, 3.11, 3.14)
+Bajarildi: Faqat audit, kod o'zgartirilmadi.
+- Mavjud dashboard: `web/src/app/(learner)/app/page.tsx` — 2.03 qoldirgan vaqtinchalik sarlavha ("Your study overview will appear here."). API chaqiruvi, blok yoki state yo'q.
+- Backend: `api/migrations/` bo'sh (0.01 bajarilmagan, `users`/`profiles`/`user_preferences` yo'q). `docs/API.md` da faqat `/health`, `/ready`, `/openapi.yaml`. `/auth/me` va learner session yo'q (1.01 B). `/app` route guard'siz.
+- Foydalanish mumkin: 2.03 shell (`LearnerShell`, header actions slot, `nav.ts` yo'llari) va 0.02 UI kit (`Card`, `Badge`, `Skeleton`, `LoadingState`/`EmptyState`/`ErrorState`, `Button`).
+- Topshiriqdagi bloklar va manbalar (hammasi hozircha yo'q):
+  - A. SAT Goal (target, imtihon sanasi, qolgan kunlar) — 2.02; oxirgi mock — 3.08/3.09.
+  - B. Today's Study Plan (vazifalar, davomiylik, holat, kunlik progress) — 2.05.
+  - C. Math / R&W progress, domain kuchli/zaif, accuracy, taqqoslash — 2.07, 3.02 (domainlar), 3.06 (practice), 3.11 (diagnostika).
+  - D. Continue Learning — 3.04 (lesson progress), 3.06 (practice set); "birinchi mavzu" tavsiyasi — 3.02/3.11.
+  - E. Recent Mock Exam + Review CTA — 3.08, 3.09.
+  - F. Recommended Next Steps — 2.07, 2.09, 3.11 ma'lumotlari.
+  - Shortcutlar: Saved (2.08), Mistakes (2.09), Library (3.10), AI (2.06) — faqat havola, sahifalar hozir shell'dagi "Page not found" ga olib boradi. Streak va haftalik activity — 2.07. Notifications — 3.14 (header slot).
+- Xulosa: hech bir blok uchun haqiqiy ma'lumot manbasi yo'q. Hozir yozilsa, yo o'ylab topilgan API kontraktiga, yo soxta ma'lumotga tayanadi (CLAUDE.md qoidasi 4 ga zid). "Yangi learner" va "ma'lumot yo'q" holatini ajratish ham `/auth/me` siz mumkin emas.
+Testlar: — (kod o'zgarmadi)
+Muammolar: Mobil (Android/iOS) ham ishlatishi uchun dashboard API'si additive va bitta aggregatsiya endpointi bo'lishi ma'qul — manba modullar tayyor bo'lgach belgilanadi.
+Keyingi qadam (tavsiya etilgan tartibda 2.07 dan keyin):
+1. `GET /api/v1/learner/dashboard` — bitta aggregatsiya endpointi (`api/internal/dashboard/`), manba modullarning servis interfeyslarini o'qiydi, o'z jadvali yo'q. Har bir blok alohida `status: ready | empty | unavailable` bilan qaytadi — bitta modul xatosi butun sahifani yiqitmaydi. Ballar faqat "estimated practice range" sifatida, rasmiy SAT natijasi bilan aralashtirilmaydi.
+2. Web: `features/learner-dashboard/` — ierarxiya: Goal + Today's Plan (yuqorida), Continue Learning + Recent Mock, Progress, Next Steps; shortcutlar ixcham qatorda; streak va notifications header slot'ida. Har blok uchun loading/empty/error/ready, retry.
+3. Tasdiq talab qiladigan qarorlar: streak qoidasi (timezone, minimal faollik), weak topic tanlash (minimal savollar soni, nechta topic), tavsiyalar qoidalari va "yetarli ma'lumot" chegarasi.
+4. Testlar: Go handler/servis testlari (har blok holati), web komponent testlari (4 holat × blok), brauzerda light/dark, wallpaper, 375/768/1280px.
+
+## 2.03-Learner · Dashboard UI — 2026-10-12
+Status: Done (layout). Route guard va header'dagi haqiqiy user/logout — Blocked by 1.01 (B bosqich: web session, `/auth/me`, `/auth/logout`)
+Qarorlar (foydalanuvchi tasdiqladi): sidebar holati cookie'da (`sat_learner_sidebar`); mobil'da drawer (bottom nav yo'q); hali qurilmagan sahifalar sidebar'da ko'rinadi va shell ichidagi "Page not found" ga olib boradi; learner route'lari `/app/*`, exam runner `/exam/*` (`(focus)` guruhi).
+Bajarildi:
+- `web/src/features/learner-shell/`: `nav.ts` (PRD §10.2 dagi 12 ta havola, Learn/Track/Account; `activeNavItem` — nested sahifalar o'z bo'limini belgilaydi, Dashboard boshqalarni "egallamaydi"), `sidebarState.ts` (cookie), `account.ts` (`useShellAccount` — `loading | unavailable | ready`), `icons.tsx` (o'z ikonkalari, 0.02 kit uslubida), komponentlar: `LearnerShell`, `Sidebar` (yig'iladi, faqat ikonkalar + `title`, screen reader uchun label saqlanadi), `SidebarNav` (`aria-current`, guruhlar labelled list), `LearnerHeader` (breadcrumb, actions slot, `UserMenu`), `MobileDrawer` (native `<dialog>`: focus containment, Escape, backdrop, havola tanlanganda yopiladi), `UserMenu` (Avatar + DropdownMenu: My Profile, Settings, Subscription, Sign out), `Brand`.
+- Route'lar: `app/(learner)/app/layout.tsx` (server'da cookie o'qiydi — birinchi paint'da sakrash yo'q), `/app` (vaqtinchalik sarlavha, 2.04 almashtiradi), `[...missing]` + `not-found.tsx`, `error.tsx`, `loading.tsx` (shell ichida). `app/(focus)/exam/layout.tsx` (sidebar/header'siz) + not-found. `/app` va `/exam` `noindex`.
+- Skip link, `banner`/`main`/`navigation` landmarklar, header sticky, faqat 0.02 tokenlari va UI kit.
+- Fake ma'lumot yo'q: session bo'lmagani uchun user menyu "Account details are unavailable" deydi, Sign out disabled. Notifications va streak ko'rsatilmaydi (faqat kodda slot).
+- `docs/ARCHITECTURE.md` §4.2 Learner shell, route jadvalida `(focus)` = `/exam/*`.
+Testlar: `npm test` — 12 fayl, 239 test o'tdi (2.03: 36 ta — nav konfiguratsiyasi va active matching, cookie parse/serialize, landmarklar, skip link, guruhlar, aria-current, breadcrumb, collapse + cookie, server'dan collapsed holat, drawer ochish/Escape/havola/close tugmasi, user menyu loading/unavailable/ready, navigatsiya, sign out va uning xatosi). `lint`, `typecheck`, `prettier --check`, `next build` — toza. Brauzerda: desktop light/dark, collapse reload'dan keyin saqlanadi, 375px mobil drawer, user menyu, `/app/exams/abc` va `/exam/x` 404 o'z layout'larida, konsolda xato yo'q.
+Muammolar:
+- Route guard yo'q: `/app` ni hozir har kim ochishi mumkin (ma'lumotni baribir API himoya qiladi). 1.01 B bosqichi web session'ni qo'shganda `(learner)/app/layout.tsx` ga guard va `useShellAccount()` ga haqiqiy session ulanadi (boshqa komponentlar o'zgarmaydi).
+- 1.01 eslatmasi: `AFTER_SIGN_IN = "/app"` — mos keladi, o'zgartirish shart emas.
+- Header search (PRD §10.3 "zarur bo'lsa") qo'yilmadi — qaysi sahifalar uchun kerakligi aniq emas.
+Keyingi qadam: 1.01 B — `useShellAccount()` va route guard. Sahifa sessiyalari (2.04–2.11, 3.xx) `nav.ts` dagi yo'lda `page.tsx` yaratadi. 3.14 va 2.04/2.07 header actions slot'iga o'z indikatorlarini qo'shadi. 3.08 `/exam/[attemptId]` ni `(focus)` ichida quradi. 2.11 sidebar cookie'sini account preferences bilan sinxronlashi mumkin.
+
+## 0.02-Foundation · Design system & Themes — 2026-10-11
+Status: Done
+Qarorlar (foydalanuvchi tasdiqladi): minimalistik, neytral dizayn; Radix va ikonka kutubxonasi yo'q (komponentlar va ikonkalar o'zimizniki); shrift Inter (`next/font`). Theme sozlamasi cookie'da saqlanadi, chunki ESLint `localStorage` ni taqiqlaydi.
+Bajarildi:
+- Tokenlar (`web/src/app/globals.css`): neytral light/dark palitra (OKLCH), primary/secondary, surface, text, border, success/warning/error/info (`-soft`, `-text`, `error-fg`), chart ranglari, typography scale, radius, shadow, z-index, duration/easing, control height. Tailwind default palitrasi o'chirilgan, shuning uchun faqat tokenlar ishlaydi.
+- Theme tizimi: Light/Dark/System, 6 ta accent (neutral default, blue, indigo, violet, teal, rose), density (comfortable/compact), motion (system/reduced/full) uchun CSS ilgaklari. Pre-paint inline script (miltillash yo'q). `ThemeProvider` + `useTheme()`. Learner va Owner sozlamalari alohida cookie'da. `ThemeSwitcher`.
+- UI kit (`web/src/components/ui`): Button, IconButton, FormField/Label, Input, Textarea, Select, Checkbox, Radio, ChoiceGroup, Switch, Card, Badge, Avatar, Tabs, Accordion, Modal (native dialog), DropdownMenu, Tooltip, Toast, Spinner, Skeleton, LoadingState, EmptyState, ErrorState, icon set. Klaviatura va ARIA pattern'lari, focus-visible, disabled va loading holatlari.
+- Umumiy `app/loading.tsx`, `error.tsx`, `not-found.tsx` tokenlar bilan qayta bezatildi. Root layout'ga Inter, theme script va provider'lar (Theme, Toast) ulandi.
+- `/dev/ui-kit` katalogi faqat development'da ochiladi. Production'da `/dev/*` 404 qaytaradi (`next.config.ts` rewrite, minimal integratsiya).
+- Dev-dependency'lar: `@testing-library/react`, `@testing-library/user-event`, `@testing-library/dom`, `jsdom`. Vitest setup: `src/test/setup.ts`.
+- `docs/ARCHITECTURE.md` §4.1 — tokenlar va komponentlardan foydalanish qoidalari.
+Testlar: `npm test` — 6 fayl, 162 test o'tdi:
+- Tokenlar: har bir theme va accent uchun WCAG AA kontrast (matnda 4.5:1, ring/primary 3:1) va har bir accentda to'liq token to'plami.
+- Theme: cookie parse/serialize, buzilgan qiymatlar, scope'lar, inline script `theme.ts` bilan bir xil natija beradi.
+- ThemeProvider va komponentlar: klaviatura navigatsiyasi, ARIA, modal, menu, tooltip, toast, avatar fallback.
+`npm run typecheck`, `npm run lint`, `format:check`, `npm run build` — toza. Production'da `curl`: `/dev/ui-kit` → 404, `/` → 200. Browser'da light/dark, accent, reload'dan keyin saqlanish, modal, dropdown va 375px mobil kenglik tekshirildi, console'da xato yo'q.
+Muammolar:
+- `make web` preview tool orqali "getcwd: Operation not permitted" bilan to'xtadi (sandbox). `npm run dev` to'g'ridan-to'g'ri ishlaydi. `.claude/launch.json` o'zgartirilmadi.
+- `app/loading.tsx` borligi sababli page ichidagi `notFound()` 404 emas, 200 status bilan stream qiladi (Next.js xatti-harakati). Sahifa SEO uchun 404 bo'lishi kerak bo'lsa, bu e'tiborga olinsin.
+- Input chegaralari (`border-strong`) 3:1 kontrastdan past, minimalistik ko'rinish uchun shunday qoldirildi. Focus holati esa 3:1 dan yuqori. 5.03 a11y review'da qayta ko'rilsin.
+Keyingi qadam: 2.03 va 4.01 layout'lari, 0.03 landing va 1.01 auth sahifalari shu kitdan foydalanadi. 2.11 Appearance sahifasini `useTheme().setPreferences` ga ulaydi (DB sync, wallpaper).
+
 ## 0.00-Foundation · Architecture & Repo setup — 2026-10-11
 Status: Done
 Bajarildi:
@@ -468,33 +600,6 @@ Muammolar: My Study Plan (rule-based reja algoritmi, daily va weekly view, vazif
 - 2.04 (Today's Study Plan bloki) va 2.07 (study plan completion) 2.05 ma'lumotini o'qiydi, shuning uchun API ularga mos bo'lishi kerak.
 Keyingi qadam: kamida 0.00 → 0.01 → 0.02 → 1.01 → 2.03 → 2.02 tugagach (tavsiya etilgan tartibda 3.10 dan keyin), 2.05 ni boshlash. Avval reja beriladi va tasdiq olinadi: algoritm qoidalari (domain vazni = zaiflik × SAT ulushi, lesson/practice/review nisbati, haftalik mock exam bormi), qayta hisoblash triggerlari (preferences o'zgarishi, o'tkazib yuborilgan kunlar, yangi diagnostik/mock natija), o'tkazib yuborilgan vazifalar keyingi kunga ko'chadimi yoki "missed" bo'lib qoladimi, kun chegarasi qaysi timezone bo'yicha, plan versiyalash (eski vazifalar va natijalar saqlanadi, faqat kelajakdagilar qayta yoziladi).
 
-## 2.04-Learner · Dashboard Home — 2026-10-11
-Status: Blocked by 0.00, 0.01, 0.02, 1.01, 2.03 (bloklar uchun qisman 2.02, 2.05, 2.07, 3.03, 3.05, 3.06, 3.08, 3.10)
-Bajarildi: Hech narsa. Repo tekshirildi: `api/`, `web/`, `api/migrations/` va `docs/ARCHITECTURE.md` hali mavjud emas. PRD §10.4 va §32 o'qildi.
-Testlar: —
-Muammolar: Dashboard Home 2.03 layouti ichida ishlaydi va boshqa modullar ma'lumotini yig'adi. 2.04 bu ma'lumotlarni o'zi yasamaydi, faqat ko'rsatadi. Har bir blok va uning manbasi:
-- Welcome: user ismi (1.01, 2.01).
-- Target SAT score: onboarding javoblari (2.02).
-- So'nggi diagnostik yoki mock natija: 3.10 (placement), 3.07/3.08 (mock natija).
-- Today's Study Plan: 2.05.
-- Daily Practice CTA: 3.05. Mock Exam CTA: 3.06 katalogi.
-- Math va R&W progressi, Recent Activity, Study streak: 2.07 (progress/activity modeli).
-- Weak Topics: 3.10 diagnostik profil, 2.09 mistake ma'lumoti.
-- Continue Learning: 3.03 lesson progress.
-Manba modul hali qurilmagan blok uchun empty state ko'rsatiladi. Fake ball yoki fake progress ishlatilmaydi.
-Keyingi qadam: kamida 0.00 → 0.01 → 0.02 → 1.01 → 2.03 tugagach, 2.04 ni boshlash (tavsiya etilgan tartibda 2.07 dan keyin). Avval reja beriladi va tasdiq olinadi: bitta aggregatsiya endpointi (`GET /learner/dashboard`) yoki har bir blok uchun alohida endpointlar, streak qanday hisoblanadi (kun chegarasi qaysi timezone bo'yicha, minimal faollik qancha), Weak Topics tanlash qoidasi (nechta topic, minimal savollar soni).
-
-## 2.03-Learner · Dashboard UI — 2026-10-11
-Status: Blocked by 0.00, 0.02, 1.01
-Bajarildi: Hech narsa. Repo tekshirildi: `api/`, `web/` va `docs/ARCHITECTURE.md` hali mavjud emas. PRD §10.1–10.3 o'qildi.
-Testlar: —
-Muammolar: Learner layout (yig'iladigan sidebar: Learn / Track / Account guruhlari; header: page title/breadcrumb, search slot, notifications, streak/progress indikator slot, avatar + profile dropdown; mobile drawer; exam uchun sidebar/headersiz bo'sh layout) quyidagilarga tayanadi:
-- 0.00: `web/` (Next.js App Router) tuzilmasi, route group'lar joylashuvi (masalan `(learner)`, `(exam)`).
-- 0.02: design tokenlar, theme va UI kit (Button, IconButton, Dropdown, Drawer, Avatar, Tooltip).
-- 1.01: learner session va route guard (layout faqat login qilgan learner uchun), logout endpointi, header uchun joriy user ma'lumoti.
-Eslatma: header'dagi notifications (3.13), streak/progress (2.07/2.04) va subscription (3.12) ma'lumotlari 2.03 da yasalmaydi — faqat slot/placeholder sifatida joy qoldiriladi, fake raqam ko'rsatilmaydi.
-Keyingi qadam: 0.00 → 0.02 → 1.01 tugagach, 2.03 ishini boshlash. Avval reja beriladi va tasdiq olinadi: sidebar collapsed holati qayerda saqlanadi (localStorage vs `user_preferences`, 2.11 bilan kelishiladi), mobile breakpoint (drawer vs bottom nav), hali qurilmagan sahifalar uchun sidebar havolalari (yashirish vs "tez orada" holati), exam layout route nomi (3.07 bilan kelishiladi).
-
 ## 2.02-Learner · Onboarding — 2026-10-11
 Status: Blocked by 0.00, 0.01, 0.02, 1.01, 2.01
 Bajarildi: Hech narsa. Repo tekshirildi: `api/`, `web/`, `api/migrations/` va `docs/ARCHITECTURE.md` hali mavjud emas. PRD §8 (va bog'liq §7, §9) o'qildi.
@@ -530,34 +635,9 @@ Muammolar: Owner auth (`/owner/login`, MFA, RBAC middleware, audit yozish helper
 - 1.01: session modeli (cookie + DB session vs JWT) va password hashing umumiy bo'lishi kerak. 1.01 avval bajarilsa, 1.02 uning session infratuzilmasini qayta ishlatadi.
 Keyingi qadam: 0.00 → 0.01 → 0.02 → 1.01 tugagach, 1.02 ishini boshlash. Avval reja beriladi va quyidagi qarorlar bo'yicha tasdiq olinadi: MFA turi (TOTP + recovery codes tavsiya etiladi), owner session muddati va idle timeout, RBAC rollari (masalan `owner`, `editor`, `viewer` yoki faqat `owner`), birinchi owner'ni yaratish usuli (seed vs CLI buyruq), audit log formati.
 
-## 1.01-Auth · Learner — 2026-10-11
-Status: Blocked by 0.00, 0.01, 0.02
-Bajarildi: Hech narsa. Repo tekshirildi: `api/`, `web/`, `api/migrations/` va `docs/ARCHITECTURE.md` hali mavjud emas. PRD §6.1 o'qildi.
-Testlar: —
-Muammolar: Learner auth (sign up/in, email verification code, Google OAuth, password reset, sessionlar, login rate limiting) quyidagilarga tayanadi:
-- 0.00: Go core (config, logger, error handler, middleware, rate limiter), `api/internal/<module>/` tuzilmasi, `web/` tuzilmasi.
-- 0.01: migration tool va `users`/`profiles` jadvallari (auth jadvallari — sessions, verification codes, password reset tokens — 1.01 o'z migrationlari bilan qo'shadi).
-- 0.02: design tokenlar va UI kit (sign-in/sign-up formalari uchun).
-Keyingi qadam: 0.00 → 0.01 → 0.02 tugagach, 1.01 ishini boshlash. Avval reja beriladi va quyidagi qarorlar bo'yicha tasdiq olinadi: session modeli (httpOnly cookie + DB session vs JWT), password hashing (argon2id), email yuborish provayderi, Google OAuth client sozlamalari (`.env`).
-
 ## 0.03-Landing (all pages) — 2026-10-11
 Status: Blocked by 0.00, 0.02
 Bajarildi: Hech narsa. Repo tekshirildi: `web/` (Next.js + Tailwind), `docs/ARCHITECTURE.md` va design system (tokenlar, theme, UI kit) hali mavjud emas. PRD §5 o'qildi.
 Testlar: —
 Muammolar: Landing sahifalari (Landing, Pricing va FAQ bo'limlari, Privacy, Terms, Contact, SEO) 0.00 belgilaydigan `web/` tuzilmasiga va 0.02 beradigan design token/UI komponentlarga tayanadi. Tokenlarsiz yozilsa, CLAUDE.md dagi "faqat design tokenlar" qoidasi buziladi.
 Keyingi qadam: 0.00 va 0.02 tugagach, 0.03 ishini boshlash. Avval sahifalar va bo'limlar rejasini berib, tasdiq olish.
-
-## 0.02-Foundation · Design system & Themes — 2026-10-11
-Status: Blocked by 0.00
-Bajarildi: Hech narsa. Repo tekshirildi: `web/` (Next.js + Tailwind loyihasi) va `docs/ARCHITECTURE.md` hali mavjud emas.
-Testlar: —
-Muammolar: Design tokenlar, theme (light/dark/system), accent va UI kit komponentlari `web/` ichida yoziladi. Papka tuzilmasi, Tailwind konfiguratsiyasi va komponentlar joylashuvi 0.00 sessiyasida belgilanishi kerak.
-Keyingi qadam: 0.00-Foundation · Architecture & Repo setup tugagach, 0.02 ishini boshlash (PRD §4.1–4.3).
-
-## 0.01-Foundation · Database & Migrations — 2026-10-11
-Status: Blocked by 0.00
-Bajarildi: Hech narsa. Repo tekshirildi: `api/`, `web/` va `docs/ARCHITECTURE.md` hali mavjud emas.
-Testlar: —
-Muammolar: Migration tool, `api/migrations/` joylashuvi, DB config va Go modul tuzilmasi 0.00 sessiyasida belgilanishi kerak.
-Keyingi qadam: 0.00-Foundation · Architecture & Repo setup tugagach, 0.01 ishini boshlash (ERD `DB.md`, migration tool, users/profiles/user_preferences/audit_logs).
-

@@ -18,6 +18,7 @@ import (
 	"github.com/samandar-hodiev/sat-platform/api/internal/platform/database"
 	"github.com/samandar-hodiev/sat-platform/api/internal/platform/logger"
 	"github.com/samandar-hodiev/sat-platform/api/internal/platform/ratelimit"
+	"github.com/samandar-hodiev/sat-platform/api/internal/platform/storage"
 	"github.com/samandar-hodiev/sat-platform/api/internal/server"
 )
 
@@ -46,10 +47,20 @@ func run() error {
 	defer db.Close()
 	pingDatabase(ctx, log, db)
 
+	if cfg.Storage.Driver != "local" {
+		return fmt.Errorf("storage driver %q is not supported", cfg.Storage.Driver)
+	}
+	store, err := storage.NewLocal(cfg.Storage.LocalDir)
+	if err != nil {
+		return err
+	}
+
 	router, err := server.NewRouter(server.Deps{
 		Config:  cfg,
 		Log:     log,
 		Limiter: ratelimit.NewMemory(),
+		DB:      db,
+		Storage: store,
 		Checks: map[string]health.Checker{
 			"database": func(ctx context.Context) error { return database.Ping(ctx, db) },
 		},

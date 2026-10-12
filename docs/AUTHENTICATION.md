@@ -1,7 +1,9 @@
 # Authentication (architecture)
 
-Status: **architecture by 0.00, to be implemented and confirmed by 1.01 (learner) and 1.02
-(owner)**. Nothing here is implemented yet. The design must work identically for the web app,
+Status: **token model confirmed and implemented by 1.01** (JWT access + rotating opaque
+refresh, as below). `api/internal/auth`: service, handlers, `Authenticate` middleware;
+`web/src/features/auth`: session, `/api/session/*`, `proxy.ts` guard; PostgreSQL store and
+migrations (docs/DB.md → Auth tables). Owner parts: 1.02. The design must work identically for the web app,
 the Owner dashboard and the Android/iOS apps, against one API and one user table.
 
 ## Token model (recommended)
@@ -103,7 +105,25 @@ related goes into `localStorage` (an ESLint rule forbids `localStorage` in the w
 - Learner endpoints only touch the authenticated user's rows (user id from the token).
 - Plan features (Premium) are checked in the API by 3.13, never only in a client.
 
+### Web session as built (1.01)
+
+| Piece | Where | Notes |
+| --- | --- | --- |
+| `sat_refresh` cookie | `/api/session/*` | Refresh token. HttpOnly, SameSite=Strict, Secure in production, `Path=/api/session`. `Max-Age` only with "Remember me" (otherwise a browser-session cookie; the server session is 24 h). |
+| `sat_signed_in` cookie | `/` | Marker `1`, no secret, HttpOnly, SameSite=Lax. Read by `src/proxy.ts` to redirect `/app/*` and `/exam/*` to `/auth/sign-in?next=…` without a session. |
+| Access token | memory (`features/auth/session.ts`) | `withAuth(call)` refreshes 30 s before expiry and retries once on 401. |
+| Refresh | `refreshSession()` | Single-flight per tab. Two tabs racing within 30 s: the loser gets 401 and retries with the new cookie; the session survives. |
+| Guard | `proxy.ts` + `SessionBoundary` | Proxy: fast redirect on missing marker. Boundary: restores the session on load, redirects when it has ended, offers retry on network errors. |
+
+Rate limiting through the session handlers: the Go API sees the Next.js server as the client,
+so the handler forwards the browser address in `X-Forwarded-For`. The API honours it only from
+`TRUSTED_PROXIES`; production must list the web server there (5.05), otherwise every web user
+shares one per-IP budget.
+
 ## Secrets and configuration (added by 1.01)
 
-`JWT_SECRET` (32+ random chars, validated at startup), `GOOGLE_CLIENT_IDS`, email provider
-keys. All live in the root `.env` read by the Go API only; none are `NEXT_PUBLIC_*`.
+`JWT_SECRET` (32+ random chars, required in production), `AUTH_ACCESS_TOKEN_TTL`,
+`AUTH_REFRESH_TOKEN_TTL`, `AUTH_SHORT_REFRESH_TOKEN_TTL`, `GOOGLE_CLIENT_IDS`, `MAIL_DRIVER`
+(`log` | `disabled`). All live in the root `.env` read by the Go API only; none are
+`NEXT_PUBLIC_*`. The web server may set `API_INTERNAL_URL` (server-only) when it reaches the API
+on a private address.

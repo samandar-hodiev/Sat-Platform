@@ -31,6 +31,15 @@ createdb -h localhost sat_platform
 DATABASE_URL=postgres://<your-mac-user>@localhost:5432/sat_platform?sslmode=disable
 ```
 
+Create the tables (safe to re-run; it only applies what is missing):
+
+```bash
+make migrate-up
+```
+
+Other migration commands: `make migrate-status`, `make migrate-down` (`n=3` for more),
+`make migrate-create name=create_learner_goals`. Details: [DB.md](DB.md#migrations).
+
 Optional, for Telegram notifications after each push (needs GitPulse on localhost:8080):
 
 ```bash
@@ -92,7 +101,9 @@ createdb -h localhost sat_platform_test
 make test-api-integration TEST_DATABASE_URL="postgres://<your-mac-user>@localhost:5432/sat_platform_test?sslmode=disable"
 ```
 
-Without `TEST_DATABASE_URL` the integration tests are skipped, not failed.
+Without `TEST_DATABASE_URL` the integration tests are skipped, not failed. The migration
+tests revert and re-apply every migration on that database, so it must hold nothing you want
+to keep.
 
 ## Troubleshooting
 

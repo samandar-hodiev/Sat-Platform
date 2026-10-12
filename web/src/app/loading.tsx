@@ -1,8 +1,7 @@
-// Shared loading state: every route segment can override it with its own loading.tsx.
+import { LoadingState } from "@/components/ui";
+
+// Shared loading state: every route segment can override it with its own loading.tsx
+// (preferably skeletons shaped like the final content).
 export default function Loading() {
-  return (
-    <div role="status" aria-live="polite" className="p-6">
-      Loading…
-    </div>
-  );
+  return <LoadingState className="min-h-[50dvh]" />;
 }

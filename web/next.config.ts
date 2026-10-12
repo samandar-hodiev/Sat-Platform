@@ -16,6 +16,18 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Development-only pages (/dev/*, e.g. the UI kit) do not exist in production. A rewrite is
+  // used instead of notFound(): the root loading.tsx starts streaming with status 200 first.
+  async rewrites() {
+    return {
+      beforeFiles:
+        process.env.NODE_ENV === "production"
+          ? [{ source: "/dev/:path*", destination: "/_dev-disabled" }]
+          : [],
+      afterFiles: [],
+      fallback: [],
+    };
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

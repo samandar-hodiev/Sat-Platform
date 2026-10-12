@@ -4,7 +4,7 @@
 TEST_DATABASE_URL ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help setup api web test test-api test-api-integration test-web lint fmt fmt-check typecheck build gitpulse-hook
+.PHONY: help setup api web migrate-up migrate-down migrate-status migrate-create test test-api test-api-integration test-web lint fmt fmt-check typecheck build gitpulse-hook
 
 ## help: list available commands
 help:
@@ -24,6 +24,23 @@ api:
 ## web: run the Next.js app (http://localhost:3000)
 web:
 	cd web && npm run dev
+
+## migrate-up: apply pending database migrations to DATABASE_URL (root .env)
+migrate-up:
+	cd api && go run ./cmd/migrate up
+
+## migrate-down: revert the last migration (make migrate-down n=3 for more)
+migrate-down:
+	cd api && go run ./cmd/migrate down $(or $(n),1)
+
+## migrate-status: show the applied and pending migrations
+migrate-status:
+	cd api && go run ./cmd/migrate status
+
+## migrate-create: new empty migration pair, e.g. make migrate-create name=create_learner_goals
+migrate-create:
+	@test -n "$(name)" || (echo "usage: make migrate-create name=snake_case_name" && exit 1)
+	cd api && go run ./cmd/migrate create $(name)
 
 ## test: Go unit tests + web unit tests
 test: test-api test-web

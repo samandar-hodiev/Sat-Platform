@@ -111,3 +111,140 @@ New codes (e.g. `PLAN_REQUIRED` for Premium gating in 3.13) are added to `apperr
 | GET | `/health` | – | 0.00 | Liveness: the process is running |
 | GET | `/ready` | – | 0.00 | Readiness: PostgreSQL answers (503 otherwise) |
 | GET | `/api/v1/openapi.yaml` | – | 0.00 | OpenAPI 3.1 contract |
+| … | `/api/v1/me/profile*`, `/api/v1/me/avatar`, `/api/v1/media/avatars/*` | Bearer / – | 2.01 | Learner profile (below) |
+
+### Auth — learner (1.01)
+
+Status: live (`api/internal/auth`, PostgreSQL store, mounted in `server.NewRouter`). Also in
+`openapi.yaml` (tag `auth`). Token model: [AUTHENTICATION.md](AUTHENTICATION.md).
+
+| Method | Path | Auth | Per-IP limit | Description |
+| --- | --- | --- | --- | --- |
+| POST | `/api/v1/auth/sign-up/start` | – | 5/min | Email a 6-digit code (same answer for new and existing emails) |
+| POST | `/api/v1/auth/sign-up/verify` | – | 10/min | Verify the code → session. New email: account created (`is_new_user: true`); existing learner: signed in |
+| POST | `/api/v1/auth/sign-in` | – | 10/min (+10 per email / 15 min) | Email + password → session |
+| POST | `/api/v1/auth/google` | – | 10/min | Google ID token → session (`503` when `GOOGLE_CLIENT_IDS` is empty) |
+| POST | `/api/v1/auth/refresh` | – | 30/min | Rotate the refresh token → new session pair |
+| POST | `/api/v1/auth/logout` | – | – | Revoke the session of the refresh token (`204`, idempotent) |
+| POST | `/api/v1/auth/password/forgot` | – | 5/min (+3 per email / hour, silent) | Email a reset link (`204` always) |
+| POST | `/api/v1/auth/password/reset` | – | 10/min | Set a new password from the link (`204`); signs out every session |
+| GET | `/api/v1/auth/me` | Bearer | – | The signed-in user |
+
+**Requests**
+
+```jsonc
+// sign-up/start, password/forgot
+{ "email": "learner@example.com" }
+// sign-up/verify
+{ "email": "learner@example.com", "code": "123456" }
+// sign-in
+{ "email": "learner@example.com", "password": "…", "remember": true }
+// google
+{ "id_token": "<Google ID token from the platform SDK>" }
+// refresh, logout
+{ "refresh_token": "…" }
+// password/reset
+{ "token": "<from the emailed link>", "password": "8–128 characters" }
+```
+
+**Responses**
+
+```jsonc
+// sign-up/start → 200
+{ "expires_at": "2026-10-12T09:10:00Z", "resend_available_at": "2026-10-12T09:01:00Z" }
+
+// sign-up/verify, sign-in, google, refresh → 200 (the "session" object)
+{
+  "access_token": "…", "access_token_expires_at": "2026-10-12T09:15:00Z",
+  "refresh_token": "…", "refresh_token_expires_at": "2026-11-11T09:00:00Z",
+  "token_type": "Bearer", "remember": true, "is_new_user": false,
+  "user": { "id": "uuid", "email": "learner@example.com", "role": "learner",
+            "email_verified": true, "has_password": false, "created_at": "…" }
+}
+
+// me → 200 (same user object plus sign-in methods)
+{ "user": { /* … */, "has_google": true } }
+```
+
+**Errors** (messages are written for learners and shown as is)
+
+| Case | Status / code | Notes |
+| --- | --- | --- |
+| Wrong email or password, unknown email, account without password | `401 UNAUTHORIZED` | One message for all: "Email or password is incorrect." |
+| Suspended/deleted account, owner account on learner routes | `403 FORBIDDEN` | Owners use `/owner/login` (1.02) |
+| Wrong / expired / used code, too many attempts | `422 VALIDATION_ERROR` | `details.fields.code` ("The code is incorrect. 4 attempts left.") |
+| Code requested too soon / daily cap (10 per email per 24 h) | `429 RATE_LIMITED` | `details.retry_after_seconds` for the cooldown |
+| Refresh token unknown, rotated, revoked or expired | `401 UNAUTHORIZED` | Reuse of a rotated token after 30 s revokes the whole session |
+| Access token expired | `401 UNAUTHORIZED` | `details.reason: "token_expired"` → refresh and retry |
+| Invalid or used reset link | `400 BAD_REQUEST` | "This reset link is invalid or has expired." |
+| Email or Google not configured | `503 SERVICE_UNAVAILABLE` | `MAIL_DRIVER=disabled`, empty `GOOGLE_CLIENT_IDS` |
+
+Other modules protect learner routes with `authModule.Authenticate()` and read the user with
+`auth.CurrentUser(c)` (`UserID`, `Role`, `SessionID`). Go-only helpers for other modules (no HTTP
+route): `Service.SetInitialPassword` / `SetInitialPasswordTx(ctx, auth.PgxTx(tx), …)` (first
+password; `409` if one exists), `Service.Account(ctx, userID)` (user + `HasGoogle`,
+`HasPassword()`) and the `auth.ProfilePrefiller` hook (new Google learner's name).
+
+**Web only — `/api/session/*` (Next.js route handlers, same origin):** `sign-in`,
+`sign-up/verify`, `google`, `refresh`, `logout`. Same bodies as above, but the refresh token
+never appears in the response: it is set as an HttpOnly cookie. Every request needs the header
+`X-Session-Request: 1`. Mobile apps call `/api/v1/auth/*` directly.
+
+### Profile — learner (2.01)
+
+Status: live (`api/internal/profile`, mounted in `server.NewRouter` after auth). Also in
+`openapi.yaml` (tag `profile`). Learner role only (`403` for other roles).
+
+| Method | Path | Auth | Limit | Description |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/me/profile` | Bearer | – | The learner's profile (empty and incomplete right after sign-up) |
+| PUT | `/api/v1/me/profile/setup` | Bearer | – | Finish Profile Setup once; sets the first password when given |
+| POST | `/api/v1/me/avatar` | Bearer | 20 / learner / hour | Upload a picture (multipart field `file`) |
+| DELETE | `/api/v1/me/avatar` | Bearer | – | Back to the default avatar |
+| GET | `/api/v1/media/avatars/{user}/{file}` | – | – | The stored image (public; 128 random bits in the URL; `Cache-Control: immutable`) |
+
+```jsonc
+// GET /me/profile, PUT /me/profile/setup, POST|DELETE /me/avatar → 200
+{
+  "email": "learner@example.com",          // verified email, read-only here
+  "first_name": "Ali", "last_name": "Valiyev",
+  "phone": "+998901234567",                // E.164 or null
+  "date_of_birth": "2008-05-01",           // or null
+  "avatar_url": "/api/v1/media/avatars/<user-id>/<32 hex>.jpg", // path on the API origin; null = default avatar
+  "timezone": "Asia/Tashkent",
+  "has_password": true,
+  "password_required": false,              // true: Profile Setup must set a password
+  "profile_completed": true,               // false → clients send the learner to Profile Setup
+  "profile_completed_at": "2026-10-12T09:00:00Z"
+}
+
+// PUT /me/profile/setup
+{ "first_name": "Ali", "last_name": "Valiyev", "phone": "+998 90 123 45 67",
+  "date_of_birth": "2008-05-01", "timezone": "Asia/Tashkent", "password": "…" }
+```
+
+Rules (all field errors come back at once in `details.fields`):
+
+- Names: 1–100 characters; letters of any script with spaces, `-`, `'`, `’`, `.`; whitespace collapsed.
+- Phone: optional; typed with spaces, dashes, brackets or a `00` prefix; stored as E.164.
+- Date of birth: required, `YYYY-MM-DD`, from 1900, learner at least **13** today (UTC).
+- Timezone: optional IANA name (the web sends the browser's); empty keeps the current one.
+- Password: required when `password_required` (email account without one), optional for Google
+  accounts, rejected when `has_password`. Auth password policy (8–128). Saved in the same
+  transaction as the profile.
+- Avatar: JPG, PNG or WebP detected from the bytes (file name and Content-Type ignored), ≤ 5 MB,
+  ≤ 40 MP. Stored as JPEG: centre square, at most 512×512, EXIF orientation applied, all metadata
+  dropped, transparency on white. A new upload replaces (and deletes) the previous file.
+
+| Case | Status / code | Notes |
+| --- | --- | --- |
+| Profile Setup already finished | `409 CONFLICT` | `details.reason: "profile_already_completed"`; later edits are My Profile (2.10) |
+| Invalid fields, bad image | `422 VALIDATION_ERROR` | `details.fields.<field>`; image errors on `file` |
+| Upload body over 5 MB + framing | `413 PAYLOAD_TOO_LARGE` | |
+| Not multipart / unreadable upload | `400 BAD_REQUEST` | |
+| Session ended / account gone | `401 UNAUTHORIZED` | |
+
+Go: `profile.GooglePrefiller` implements `auth.ProfilePrefiller` (fills empty names of a new
+Google learner); `profile.AuthAccounts` adapts `auth.Service`. The upload route has its own body
+limit through `middleware.BodyLimitWithRoutes`.
+

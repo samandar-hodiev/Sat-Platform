@@ -40,6 +40,7 @@ type Query = Record<
 
 export interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  /** JSON-encoded, except FormData (file uploads), which is sent as multipart/form-data. */
   body?: unknown;
   query?: Query;
   accessToken?: string;
@@ -79,7 +80,9 @@ export function createApiClient(config: ClientConfig) {
       "X-Client-Platform": "web",
       ...options.headers,
     };
-    if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    const multipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+    // For FormData the browser sets Content-Type itself, with the multipart boundary.
+    if (options.body !== undefined && !multipart) headers["Content-Type"] = "application/json";
     if (options.accessToken) headers.Authorization = `Bearer ${options.accessToken}`;
 
     let response: Response;
@@ -87,7 +90,12 @@ export function createApiClient(config: ClientConfig) {
       response = await doFetch(buildUrl(config.baseUrl, version, path, options.query), {
         method: options.method ?? "GET",
         headers,
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        body:
+          options.body === undefined
+            ? undefined
+            : multipart
+              ? (options.body as FormData)
+              : JSON.stringify(options.body),
         signal: options.signal,
       });
     } catch (err) {

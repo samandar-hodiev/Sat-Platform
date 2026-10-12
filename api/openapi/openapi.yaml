@@ -14,6 +14,10 @@ servers:
 tags:
   - name: health
   - name: meta
+  - name: auth
+    description: Learner authentication (1.01). Rules and error table in docs/API.md → Auth.
+  - name: profile
+    description: Learner profile and Profile Setup (2.01). Rules in docs/API.md → Profile.
 
 components:
   securitySchemes:
@@ -86,6 +90,65 @@ components:
         page: { type: integer, minimum: 1 }
         page_size: { type: integer, minimum: 1, maximum: 100 }
         total: { type: integer, minimum: 0 }
+    AuthUser:
+      type: object
+      required: [id, email, role, email_verified, has_password, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [learner] }
+        email_verified: { type: boolean }
+        has_password: { type: boolean }
+        created_at: { type: string, format: date-time }
+    AuthSession:
+      type: object
+      required: [access_token, access_token_expires_at, refresh_token, refresh_token_expires_at, token_type, remember, user, is_new_user]
+      properties:
+        access_token: { type: string, description: "JWT, 15 minutes. Send as Authorization: Bearer." }
+        access_token_expires_at: { type: string, format: date-time }
+        refresh_token: { type: string, description: Opaque; rotates on every refresh. Keep in secure storage. }
+        refresh_token_expires_at: { type: string, format: date-time }
+        token_type: { type: string, const: Bearer }
+        remember: { type: boolean }
+        user: { $ref: "#/components/schemas/AuthUser" }
+        is_new_user: { type: boolean, description: True when the account was just created (continue to Profile Setup). }
+    AuthSessionEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: "#/components/schemas/AuthSession" }
+    EmailRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+    RefreshTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string, maxLength: 256 }
+    LearnerProfile:
+      type: object
+      required: [email, first_name, last_name, phone, date_of_birth, avatar_url, timezone, has_password, password_required, profile_completed, profile_completed_at]
+      properties:
+        email: { type: string, format: email, description: Verified account email (read-only here). }
+        first_name: { type: [string, "null"] }
+        last_name: { type: [string, "null"] }
+        phone: { type: [string, "null"], description: "E.164, e.g. +998901234567." }
+        date_of_birth: { type: [string, "null"], format: date }
+        avatar_url: { type: [string, "null"], description: Path on the API origin (prefix the API base URL). Null means the default avatar. }
+        timezone: { type: string, description: IANA name. }
+        has_password: { type: boolean }
+        password_required: { type: boolean, description: Profile Setup must set a password (email account without one). }
+        profile_completed: { type: boolean, description: False until Profile Setup is done; clients send the learner to Profile Setup. }
+        profile_completed_at: { type: [string, "null"], format: date-time }
+    ProfileEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: "#/components/schemas/LearnerProfile" }
     CheckResult:
       type: object
       required: [status, latency_ms]
@@ -104,6 +167,11 @@ components:
           additionalProperties: { $ref: "#/components/schemas/CheckResult" }
 
   responses:
+    AuthError:
+      description: Client error with a learner-facing message (see docs/API.md → Auth errors).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
     RateLimited:
       description: Too many requests; retry after the Retry-After header.
       headers:
@@ -174,3 +242,336 @@ paths:
             application/yaml:
               schema: { type: string }
         "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/auth/sign-up/start:
+    post:
+      tags: [auth]
+      operationId: startSignUp
+      summary: Email a 6-digit verification code (same answer for new and existing emails)
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+      responses:
+        "200":
+          description: Code sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [expires_at, resend_available_at]
+                    properties:
+                      expires_at: { type: string, format: date-time }
+                      resend_available_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "503": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/auth/sign-up/verify:
+    post:
+      tags: [auth]
+      operationId: verifySignUp
+      summary: Verify the code; creates the learner account or signs an existing learner in
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: "^[0-9]{6}$" }
+      responses:
+        "200":
+          description: Signed in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSessionEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/auth/sign-in:
+    post:
+      tags: [auth]
+      operationId: signIn
+      summary: Sign in with email and password
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, maxLength: 512 }
+                remember: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Signed in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSessionEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/auth/google:
+    post:
+      tags: [auth]
+      operationId: signInWithGoogle
+      summary: Sign in with a Google ID token (web, Android, iOS)
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_token]
+              properties:
+                id_token: { type: string }
+      responses:
+        "200":
+          description: Signed in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSessionEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "503": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      operationId: refreshSession
+      summary: Rotate the refresh token and get a new token pair
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "200":
+          description: Signed in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthSessionEnvelope" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Revoke the session of the refresh token (idempotent)
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
+      responses:
+        "204": { description: Done. }
+  /api/v1/auth/password/forgot:
+    post:
+      tags: [auth]
+      operationId: forgotPassword
+      summary: Email a password reset link (always 204)
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+      responses:
+        "204": { description: Done. }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "503": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/auth/password/reset:
+    post:
+      tags: [auth]
+      operationId: resetPassword
+      summary: Set a new password from a reset link; signs out every session
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        "204": { description: Done. }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      operationId: getMe
+      summary: The signed-in user
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      responses:
+        "200":
+          description: The user.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [user]
+                    properties:
+                      user:
+                        allOf:
+                          - $ref: "#/components/schemas/AuthUser"
+                          - type: object
+                            required: [has_google]
+                            properties:
+                              has_google: { type: boolean, description: A Google identity is linked. }
+        "401": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/profile:
+    get:
+      tags: [profile]
+      operationId: getMyProfile
+      summary: The signed-in learner's profile
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      responses:
+        "200":
+          description: The profile (empty and incomplete right after sign-up).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileEnvelope" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/profile/setup:
+    put:
+      tags: [profile]
+      operationId: completeProfileSetup
+      summary: Finish Profile Setup (once)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, date_of_birth]
+              properties:
+                first_name: { type: string, maxLength: 100 }
+                last_name: { type: string, maxLength: 100 }
+                phone: { type: string, description: Optional; international format, normalized to E.164. }
+                date_of_birth: { type: string, format: date, description: At least 13 years old. }
+                timezone: { type: string, description: Optional IANA name; empty keeps the current one. }
+                password: { type: string, description: "Required when password_required; optional for Google accounts; must be empty when has_password." }
+      responses:
+        "200":
+          description: The completed profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "409": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/avatar:
+    post:
+      tags: [profile]
+      operationId: uploadAvatar
+      summary: Upload a profile picture
+      description: JPG, PNG or WebP up to 5 MB in the multipart field "file". Stored as a 512×512 (or smaller) JPEG without metadata. 20 uploads per learner per hour.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: The profile with the new avatar_url.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "413": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [profile]
+      operationId: removeAvatar
+      summary: Go back to the default avatar
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      responses:
+        "200":
+          description: The profile with avatar_url null.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileEnvelope" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+  /api/v1/media/avatars/{user}/{file}:
+    get:
+      tags: [profile]
+      operationId: getAvatarImage
+      summary: A stored avatar (public, unguessable URL, cached for a year)
+      parameters:
+        - { name: user, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{32}\\.jpg$" } }
+      responses:
+        "200":
+          description: The image.
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/AuthError" }

@@ -89,3 +89,45 @@ func TestRequestIDAcceptsOnlyWellFormedIDs(t *testing.T) {
 		t.Errorf("malformed id must be replaced, got %q", id)
 	}
 }
+
+func TestBodyLimitWithRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(BodyLimitWithRoutes(10, map[string]int64{"POST /upload": 100}))
+	read := func(c *gin.Context) {
+		if _, err := c.GetRawData(); err != nil {
+			c.Status(http.StatusRequestEntityTooLarge)
+			return
+		}
+		c.Status(http.StatusOK)
+	}
+	r.POST("/upload", read)
+	r.POST("/other", read)
+	r.PUT("/upload", read)
+
+	cases := []struct {
+		method, path string
+		size, want   int
+	}{
+		{http.MethodPost, "/upload", 100, http.StatusOK},
+		{http.MethodPost, "/upload", 101, http.StatusRequestEntityTooLarge},
+		{http.MethodPost, "/other", 11, http.StatusRequestEntityTooLarge},
+		{http.MethodPut, "/upload", 11, http.StatusRequestEntityTooLarge}, // limit is per method
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(strings.Repeat("x", tc.size)))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != tc.want {
+			t.Errorf("%s %s %d bytes: %d, want %d", tc.method, tc.path, tc.size, w.Code, tc.want)
+		}
+	}
+	// Without Content-Length the reader still stops at the route's limit.
+	req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(strings.Repeat("x", 101)))
+	req.ContentLength = -1
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("chunked: %d", w.Code)
+	}
+}

@@ -85,6 +85,7 @@ func TestProductionIsStricter(t *testing.T) {
 	env = validEnv()
 	env["APP_ENV"] = "production"
 	env["WEB_URL"] = "https://sat.example"
+	env["JWT_SECRET"] = strings.Repeat("s", 32)
 	cfg, err := FromLookup(lookupFrom(env))
 	if err != nil {
 		t.Fatalf("valid production config rejected: %v", err)
@@ -121,5 +122,57 @@ func TestDotEnvDoesNotOverrideProcessEnv(t *testing.T) {
 	}
 	if err := loadDotEnv(filepath.Join(dir, "missing.env")); err != nil {
 		t.Errorf("missing file must be ignored: %v", err)
+	}
+}
+
+func TestAuthConfig(t *testing.T) {
+	cfg, err := FromLookup(lookupFrom(validEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := cfg.Auth
+	if a.JWTSecret != "" || a.AccessTokenTTL != 15*time.Minute || a.RefreshTokenTTL != 720*time.Hour ||
+		a.ShortRefreshTokenTTL != 24*time.Hour || a.MailDriver != "log" || len(a.GoogleClientIDs) != 0 {
+		t.Errorf("unexpected auth defaults: %+v", a)
+	}
+
+	env := validEnv()
+	env["GOOGLE_CLIENT_IDS"] = "web.apps.googleusercontent.com, ios.apps.googleusercontent.com"
+	cfg, err = FromLookup(lookupFrom(env))
+	if err != nil || len(cfg.Auth.GoogleClientIDs) != 2 {
+		t.Fatalf("google ids: %v %v", cfg, err)
+	}
+
+	env = validEnv()
+	env["JWT_SECRET"] = "too-short-secret-value"
+	env["MAIL_DRIVER"] = "smtp"
+	env["AUTH_ACCESS_TOKEN_TTL"] = "2h"
+	_, err = FromLookup(lookupFrom(env))
+	if err == nil {
+		t.Fatal("expected errors")
+	}
+	for _, want := range []string{"JWT_SECRET must be at least 32", "MAIL_DRIVER", "AUTH_ACCESS_TOKEN_TTL"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "too-short-secret-value") {
+		t.Error("the secret must never be echoed")
+	}
+
+	env = validEnv()
+	env["APP_ENV"] = "production"
+	env["WEB_URL"] = "https://sat.example"
+	env["MAIL_DRIVER"] = "log"
+	_, err = FromLookup(lookupFrom(env))
+	if err == nil || !strings.Contains(err.Error(), "JWT_SECRET is required") || !strings.Contains(err.Error(), "MAIL_DRIVER=log") {
+		t.Fatalf("production must require JWT_SECRET and forbid the log mail driver: %v", err)
+	}
+
+	env["JWT_SECRET"] = strings.Repeat("s", 32)
+	delete(env, "MAIL_DRIVER")
+	cfg, err = FromLookup(lookupFrom(env))
+	if err != nil || cfg.Auth.MailDriver != "disabled" {
+		t.Fatalf("production mail should default to disabled: %v %v", cfg, err)
 	}
 }

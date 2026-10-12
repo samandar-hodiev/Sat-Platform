@@ -156,9 +156,20 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 	}
 }
 
-// BodyLimit caps request bodies. Upload routes raise their own limit when they exist.
+// BodyLimit caps request bodies. Upload routes raise their own limit with BodyLimitWithRoutes.
 func BodyLimit(maxBytes int64) gin.HandlerFunc {
+	return BodyLimitWithRoutes(maxBytes, nil)
+}
+
+// BodyLimitWithRoutes is BodyLimit with per-route limits for uploads, keyed by "METHOD /path"
+// as registered (e.g. "POST /api/v1/me/avatar"). Gin matches the route before global
+// middleware runs, so the route's limit applies before any byte is read.
+func BodyLimitWithRoutes(defaultMax int64, routes map[string]int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		maxBytes := defaultMax
+		if n, ok := routes[c.Request.Method+" "+c.FullPath()]; ok {
+			maxBytes = n
+		}
 		if c.Request.ContentLength > maxBytes {
 			httpx.WriteError(c, apperr.New(apperr.CodePayloadTooLarge, "Request body is too large"))
 			return

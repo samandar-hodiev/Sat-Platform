@@ -35,6 +35,7 @@ type Config struct {
 	HTTP      HTTPConfig
 	RateLimit RateLimitConfig
 	Storage   StorageConfig
+	Auth      AuthConfig
 }
 
 type DatabaseConfig struct {
@@ -62,6 +63,25 @@ type StorageConfig struct {
 	LocalDir string
 }
 
+// AuthConfig is learner authentication (session 1.01, docs/AUTHENTICATION.md).
+type AuthConfig struct {
+	// JWTSecret signs access tokens and keys verification-code hashes. Required in production.
+	// Empty in development/test: the API generates a random one per start (all tokens become
+	// invalid on restart) and logs a warning.
+	JWTSecret       string
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration // "Remember me"
+	// ShortRefreshTokenTTL is the session lifetime without "Remember me".
+	ShortRefreshTokenTTL time.Duration
+	// GoogleClientIDs are the accepted ID-token audiences (web, Android, iOS). Empty disables
+	// Google sign-in (the endpoint answers SERVICE_UNAVAILABLE).
+	GoogleClientIDs []string
+	// MailDriver: "log" (development: emails go to the API log) or "disabled" (no email; sign-up
+	// by code and password reset answer SERVICE_UNAVAILABLE). Default: log in development and
+	// test, disabled in production. A real provider is added before launch (5.05).
+	MailDriver string
+}
+
 func (c *Config) IsProduction() bool { return c.Env == EnvProduction }
 
 // Load reads the process environment (plus .env outside production) and validates it.
@@ -86,6 +106,10 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		defaultFormat = "json"
 	}
 	webURL := r.str("WEB_URL", "http://localhost:3000")
+	defaultMail := "log"
+	if env == EnvProduction {
+		defaultMail = "disabled"
+	}
 
 	cfg := &Config{
 		Env:       env,
@@ -110,6 +134,14 @@ func FromLookup(lookup func(string) (string, bool)) (*Config, error) {
 		Storage: StorageConfig{
 			Driver:   r.str("STORAGE_DRIVER", "local"),
 			LocalDir: r.str("STORAGE_LOCAL_DIR", "./var/storage"),
+		},
+		Auth: AuthConfig{
+			JWTSecret:            r.str("JWT_SECRET", ""),
+			AccessTokenTTL:       r.duration("AUTH_ACCESS_TOKEN_TTL", 15*time.Minute),
+			RefreshTokenTTL:      r.duration("AUTH_REFRESH_TOKEN_TTL", 30*24*time.Hour),
+			ShortRefreshTokenTTL: r.duration("AUTH_SHORT_REFRESH_TOKEN_TTL", 24*time.Hour),
+			GoogleClientIDs:      r.list("GOOGLE_CLIENT_IDS", nil),
+			MailDriver:           r.str("MAIL_DRIVER", defaultMail),
 		},
 	}
 
@@ -157,6 +189,20 @@ func (c *Config) validate() []error {
 		errs = append(errs, fmt.Errorf("STORAGE_DRIVER %q is not supported (available: local)", c.Storage.Driver))
 	}
 
+	// The secret is never echoed, only its length is checked.
+	if c.Auth.JWTSecret != "" && len(c.Auth.JWTSecret) < 32 {
+		errs = append(errs, errors.New("JWT_SECRET must be at least 32 characters"))
+	}
+	if c.Auth.AccessTokenTTL > time.Hour {
+		errs = append(errs, errors.New("AUTH_ACCESS_TOKEN_TTL must be at most 1h"))
+	}
+	if c.Auth.ShortRefreshTokenTTL > c.Auth.RefreshTokenTTL {
+		errs = append(errs, errors.New("AUTH_SHORT_REFRESH_TOKEN_TTL must not exceed AUTH_REFRESH_TOKEN_TTL"))
+	}
+	if c.Auth.MailDriver != "log" && c.Auth.MailDriver != "disabled" {
+		errs = append(errs, fmt.Errorf("MAIL_DRIVER %q is not supported (available: log, disabled)", c.Auth.MailDriver))
+	}
+
 	if len(c.HTTP.CORSAllowedOrigins) == 0 {
 		errs = append(errs, errors.New("CORS_ALLOWED_ORIGINS must list at least one web origin"))
 	}
@@ -174,6 +220,13 @@ func (c *Config) validate() []error {
 		}
 		if c.LogFormat != "json" {
 			errs = append(errs, errors.New("LOG_FORMAT must be json in production"))
+		}
+		if c.Auth.JWTSecret == "" {
+			errs = append(errs, errors.New("JWT_SECRET is required in production"))
+		}
+		if c.Auth.MailDriver == "log" {
+			// The log driver writes verification codes to the log; never in production.
+			errs = append(errs, errors.New("MAIL_DRIVER=log is not allowed in production"))
 		}
 	}
 	return errs

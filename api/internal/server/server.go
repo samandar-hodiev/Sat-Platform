@@ -15,12 +15,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/samandar-hodiev/sat-platform/api/internal/auth"
 	"github.com/samandar-hodiev/sat-platform/api/internal/config"
 	"github.com/samandar-hodiev/sat-platform/api/internal/health"
 	"github.com/samandar-hodiev/sat-platform/api/internal/httpx"
 	"github.com/samandar-hodiev/sat-platform/api/internal/middleware"
 	"github.com/samandar-hodiev/sat-platform/api/internal/platform/ratelimit"
+	"github.com/samandar-hodiev/sat-platform/api/internal/platform/storage"
+	"github.com/samandar-hodiev/sat-platform/api/internal/profile"
 	"github.com/samandar-hodiev/sat-platform/api/openapi"
 )
 
@@ -30,6 +34,11 @@ type Deps struct {
 	Config  *config.Config
 	Log     *slog.Logger
 	Limiter ratelimit.Limiter
+	// DB is the PostgreSQL pool. Router-only tests leave it nil; database-backed modules
+	// (auth, …) are then not mounted.
+	DB *pgxpool.Pool
+	// Storage holds uploads (avatars, …). Required when DB is set.
+	Storage storage.ObjectStorage
 	// Checks are the readiness checks, e.g. {"database": ping}.
 	Checks map[string]health.Checker
 }
@@ -57,7 +66,10 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 		middleware.Recovery(d.Log),
 		middleware.SecurityHeaders(cfg.IsProduction()),
 		middleware.CORS(cfg.HTTP.CORSAllowedOrigins),
-		middleware.BodyLimit(cfg.HTTP.MaxBodyBytes),
+		// Upload routes get their own body limit; everything else keeps HTTP_MAX_BODY_BYTES.
+		middleware.BodyLimitWithRoutes(cfg.HTTP.MaxBodyBytes, map[string]int64{
+			http.MethodPost + " " + profile.AvatarRoute: profile.AvatarRequestMaxBytes,
+		}),
 		middleware.Errors(d.Log),
 	)
 
@@ -66,8 +78,31 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 	v1 := r.Group("/api/v1",
 		middleware.RateLimit(d.Limiter, "api", cfg.RateLimit.PerMinute, time.Minute, nil))
 	openapi.RegisterRoutes(v1)
-	// Modules register their routes here as they are built, e.g.
-	//   auth.NewModule(auth.Deps{...}).RegisterRoutes(v1)
+	// Modules register their routes here as they are built. Learner routes of later modules use
+	// authModule.Authenticate() and read auth.CurrentUser(c).
+	if d.DB != nil {
+		if d.Storage == nil {
+			return nil, errors.New("server: Storage is required with DB")
+		}
+		profileStore := profile.NewPostgresStore(d.DB)
+		authModule, err := auth.NewModule(auth.Deps{
+			Config: cfg, Log: d.Log, Limiter: d.Limiter, Store: auth.NewPostgresStore(d.DB),
+			ProfilePrefiller: profile.GooglePrefiller{Store: profileStore},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("auth module: %w", err)
+		}
+		authModule.RegisterRoutes(v1)
+
+		profileModule, err := profile.NewModule(profile.Deps{
+			Log: d.Log, Limiter: d.Limiter, Store: profileStore, Storage: d.Storage,
+			Accounts: profile.AuthAccounts{Auth: authModule.Service},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("profile module: %w", err)
+		}
+		profileModule.RegisterRoutes(v1, authModule.Authenticate())
+	}
 
 	return r, nil
 }
