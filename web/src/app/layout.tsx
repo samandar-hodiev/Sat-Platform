@@ -5,16 +5,21 @@ import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import { ThemeScript } from "@/components/theme/ThemeScript";
 import { ToastProvider } from "@/components/ui";
 
+import { SITE_DESCRIPTION, SITE_NAME, siteUrl } from "@/lib/site";
+
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], display: "swap", variable: "--font-inter" });
 
 export const metadata: Metadata = {
+  // Resolves relative canonical and Open Graph URLs (SEO, session 0.03).
+  metadataBase: new URL(siteUrl()),
+  applicationName: SITE_NAME,
   title: {
-    default: "SAT Platform",
-    template: "%s · SAT Platform",
+    default: SITE_NAME,
+    template: `%s · ${SITE_NAME}`,
   },
-  description: "Self-study preparation for the Digital SAT.",
+  description: SITE_DESCRIPTION,
 };
 
 export const viewport: Viewport = {

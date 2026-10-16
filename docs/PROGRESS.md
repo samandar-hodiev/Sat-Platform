@@ -3,6 +3,19 @@
 Har bir sessiya ish oxirida shu formatda yozadi (yangi yozuv eng tepaga qo'shiladi):
 
 ```
+## 0.03-Landing (all pages) — 2026-10-17
+Status: Done
+Qarorlar (foydalanuvchi tasdiqladi): matnlar inglizcha; Pricing — Free/Premium narxsiz ("Pricing coming soon", narx va limitlarni 3.13 beradi); Contact — forma emas, `mailto:` (`NEXT_PUBLIC_SUPPORT_EMAIL`); Privacy/Terms — shablon + "yurist ko'rib chiqmagan" ogohlantirishi.
+Bajarildi:
+- `app/(public)/` route group: `/` (PRD §5.3 tartibida: Hero, Features, Daily Practice, Mock Exam, AI Assistant, Study Plan, Progress, How It Works, Pricing, FAQ, CTA, Footer), `/pricing`, `/faq`, `/privacy`, `/terms`, `/contact`. Eski placeholder `app/page.tsx` o'chirildi.
+- Public header (PRD §5.1 havolalari, Sign In → `/auth/sign-in`, Create Account / Start Preparing → `/auth/sign-up`, `xl` dan kichik ekranda native `<dialog>` menyu, ThemeSwitcher), footer (Privacy, Terms, Contact, College Board trademark ogohlantirishi), skip link.
+- `web/src/features/landing/`: `content.ts` (barcha matnlar), `legal.ts` (`LEGAL_CONFIG` — operator, sana, qonun, `reviewed`), `seo.ts`, ikonlar, komponentlar. Preview'lar sxematik, "Illustration" belgisi bilan, raqam yoki ball ko'rsatmaydi.
+- SEO: `lib/site.ts`, root `metadataBase`, har sahifaga title/description/canonical/Open Graph/Twitter, JSON-LD (Organization, WebSite, FAQPage), `sitemap.xml`, `robots.txt` (private yo'llar yopiq). `web/.env.example` ga `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_SUPPORT_EMAIL` qo'shildi.
+- `docs/ARCHITECTURE.md` §4.3 Public site. Yangi endpoint yoki jadval yo'q.
+Testlar: `content.test.ts` (va'da/fake raqam yo'qligi, anchor va CTA havolalari, legal yo'llar auth bilan mos), `seo.test.ts` (site URL, support email, sitemap, robots, metadata, JSON-LD escape), `components/landing.test.tsx` (header, mobil menyu, footer, bo'limlar tartibi, bitta h1, illustratsiya belgilari, narxsiz planlar, FAQ accordion, Contact ikki holati, legal sahifalar). Web: 23 fayl / 348 test o'tdi; typecheck, lint, prettier, `next build` toza. Brauzerda 1024px va 375px (light/dark) tekshirildi, gorizontal overflow yo'q.
+Muammolar: Narxlar yo'q — Blocked by 3.13 (planlar API'si tayyor bo'lgach `PLANS`/`PRICING_STATUS` almashtiriladi). Legal matnlar yurist tekshiruvidan o'tishi va `LEGAL_CONFIG` to'ldirilishi kerak. Production'da `NEXT_PUBLIC_SITE_URL` o'rnatilishi shart (5.05), aks holda canonical localhost'ga ishora qiladi. OG rasm (`opengraph-image`) hali yo'q — brend logotipi tayyor bo'lgach qo'shiladi.
+Keyingi qadam: 3.13 — pricing kartalarini haqiqiy plan ma'lumotlariga ulash; support email va legal rekvizitlarni foydalanuvchi beradi.
+
 ## <raqam>-<sessiya nomi> — YYYY-MM-DD
 Status: Done | In progress | Blocked by <raqam>
 Bajarildi:

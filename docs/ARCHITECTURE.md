@@ -207,6 +207,27 @@ analytics, platform settings, audit logs.
   exam runner (3.08 adds `/exam/[attemptId]`; until then `/exam/*` is not found in that layout).
 - Pages under `/app` and `/exam` are `noindex`.
 
+### 4.3 Public site (0.03)
+
+- `app/(public)/layout.tsx`: skip link, `PublicHeader` (PRD §5.1 links, Sign In, Create Account;
+  below `xl` a native `<dialog>` menu), `<main id="main">`, `PublicFooter` (legal links and the
+  College Board trademark notice). Pages: `/`, `/pricing`, `/faq`, `/privacy`, `/terms`, `/contact`.
+- **Copy** lives in `features/landing/content.ts` (landing, plans, FAQ) and `legal.ts` (Privacy,
+  Terms). `content.test.ts` rejects score guarantees, invented prices/counts/ratings, and any
+  "official score" statement that is not a denial. Product previews (`Illustration.tsx`) are
+  schematic, carry an "Illustration" badge and show no numbers.
+- **Pricing** shows Free/Premium without prices or limits ("Pricing coming soon"). 3.13 replaces
+  `PLANS`/`PRICING_STATUS` with data from its API; the cards stay.
+- **Legal texts** are templates: `LEGAL_CONFIG` (operator, last updated, governing law,
+  `reviewed`) must be filled after legal review; until `reviewed: true` both pages show a draft notice.
+- **Contact** is a `mailto:` link from `NEXT_PUBLIC_SUPPORT_EMAIL`; without it the page shows a
+  "coming soon" state. There is no contact form or endpoint.
+- **SEO**: `lib/site.ts` (`siteUrl()` from `NEXT_PUBLIC_SITE_URL`, dev fallback
+  `http://localhost:3000`); root `metadataBase`; `publicPageMetadata()` gives each page a title,
+  description, canonical URL, Open Graph and Twitter card; JSON-LD (`Organization`, `WebSite`,
+  `FAQPage`, `<` escaped); `app/sitemap.ts` lists only public pages; `app/robots.ts` disallows
+  `/app`, `/exam`, `/setup`, `/owner`, `/api`, `/dev`.
+
 ## 5. Mobile
 
 Flutter (one codebase for Android and iOS), built later in `mobile/`. It uses the same API
