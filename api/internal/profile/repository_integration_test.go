@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/samandar-hodiev/sat-platform/api/internal/auth"
 	"github.com/samandar-hodiev/sat-platform/api/internal/platform/migrate"
 	"github.com/samandar-hodiev/sat-platform/api/migrations"
 )
@@ -70,6 +71,16 @@ func TestPostgresStore(t *testing.T) {
 		"setup for deleted user":          testSetupForMissingUser,
 		"concurrent setup completes once": testConcurrentSetup,
 		"password runs in profile tx":     testPasswordSeesProfileTx,
+		// My Profile (2.10), account_test.go.
+		"update profile":                 TestUpdateProfile,
+		"update every invalid field":     TestUpdateProfileReportsEveryInvalidField,
+		"update needs finished setup":    TestUpdateProfileNeedsFinishedSetup,
+		"delete with password":           TestDeleteAccountWithPassword,
+		"delete with code, no profile":   TestDeleteAccountWithCodeAndWithoutProfile,
+		"delete auth failure rolls back": testDeleteAccountRollsBack,
+		"delete is one transaction":      testDeleteAccountOneTx,
+		"http update":                    TestHTTPUpdateProfile,
+		"http delete":                    TestHTTPDeleteAccount,
 	}
 	for name, fn := range scenarios {
 		t.Run(name, fn)
@@ -141,5 +152,43 @@ func testPasswordSeesProfileTx(t *testing.T) {
 	var hash string
 	if err := f.store.(*PostgresStore).db.QueryRow(ctx, `SELECT password_hash FROM users WHERE id = $1`, userEmail).Scan(&hash); err != nil || hash != "x" {
 		t.Fatal(hash, err)
+	}
+}
+
+// A failing auth step rolls the profile deletion back, and the users row stays live.
+func testDeleteAccountRollsBack(t *testing.T) {
+	TestDeleteAccountAuthFailureKeepsProfile(t)
+}
+
+// The users row is soft-deleted and the profile row removed together.
+func testDeleteAccountOneTx(t *testing.T) {
+	f := newFixture(t)
+	f.completed(t, userGoogle)
+	db := f.store.(*PostgresStore).db
+	if err := f.svc.DeleteAccount(ctx, userGoogle, DeleteAccountInput{Confirmation: "DELETE", Reauth: auth.Reauth{Code: fakeReauthCode}}); err != nil {
+		t.Fatal(err)
+	}
+	var deleted bool
+	var profiles int
+	if err := db.QueryRow(ctx, `SELECT deleted_at IS NOT NULL, (SELECT count(*) FROM profiles WHERE user_id = $1)
+		FROM users WHERE id = $1`, userGoogle).Scan(&deleted, &profiles); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted || profiles != 0 {
+		t.Fatalf("deleted=%v profiles=%d", deleted, profiles)
+	}
+
+	// With a failing auth step neither happens.
+	f.completed(t, userPwd)
+	f.accounts.failNext = errAuthDown
+	if err := f.svc.DeleteAccount(ctx, userPwd, DeleteAccountInput{Confirmation: "DELETE", Reauth: auth.Reauth{Password: "x"}}); err == nil {
+		t.Fatal("want the auth error")
+	}
+	if err := db.QueryRow(ctx, `SELECT deleted_at IS NOT NULL, (SELECT count(*) FROM profiles WHERE user_id = $1)
+		FROM users WHERE id = $1`, userPwd).Scan(&deleted, &profiles); err != nil {
+		t.Fatal(err)
+	}
+	if deleted || profiles != 1 {
+		t.Fatalf("rolled back: deleted=%v profiles=%d", deleted, profiles)
 	}
 }

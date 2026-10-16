@@ -53,6 +53,8 @@ func (h *Handler) RegisterRoutes(v1 *gin.RouterGroup) {
 	g.POST("/password/forgot", limit("auth:forgot"), h.forgotPassword)
 	g.POST("/password/reset", limit("auth:reset"), h.resetPassword)
 	g.GET("/me", h.Authenticate(), h.me)
+
+	h.registerAccountRoutes(v1) // My Profile (2.10), handler_account.go
 }
 
 // ---------------------------------------------------------------------------------------------

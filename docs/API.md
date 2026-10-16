@@ -239,7 +239,7 @@ Rules (all field errors come back at once in `details.fields`):
 
 | Case | Status / code | Notes |
 | --- | --- | --- |
-| Profile Setup already finished | `409 CONFLICT` | `details.reason: "profile_already_completed"`; later edits are My Profile (2.10) |
+| Profile Setup already finished | `409 CONFLICT` | `details.reason: "profile_already_completed"`; later edits: `PATCH /me/profile` (My Profile, 2.10) |
 | Invalid fields, bad image | `422 VALIDATION_ERROR` | `details.fields.<field>`; image errors on `file` |
 | Upload body over 5 MB + framing | `413 PAYLOAD_TOO_LARGE` | |
 | Not multipart / unreadable upload | `400 BAD_REQUEST` | |
@@ -248,6 +248,92 @@ Rules (all field errors come back at once in `details.fields`):
 Go: `profile.GooglePrefiller` implements `auth.ProfilePrefiller` (fills empty names of a new
 Google learner); `profile.AuthAccounts` adapts `auth.Service`. The upload route has its own body
 limit through `middleware.BodyLimitWithRoutes`.
+
+### My Profile — learner (2.10)
+
+Status: live. Email, password, sign-in methods: `api/internal/auth` (`account.go`,
+`handler_account.go`); profile edit and account deletion: `api/internal/profile` (`account.go`,
+`handler_account.go`). Also in `openapi.yaml` (tag `account`). Learner role only (`403` for other
+roles). PRD §20 Account.
+
+| Method | Path | Auth | Limit (per learner) | Description |
+| --- | --- | --- | --- | --- |
+| PATCH | `/api/v1/me/profile` | Bearer | – | Edit the profile after Profile Setup; returns the profile (shape as in Profile) |
+| GET | `/api/v1/me/sign-in-methods` | Bearer | – | Email, password, Google, and what sensitive changes ask for |
+| POST | `/api/v1/me/reauth/code` | Bearer | 5 / 10 min | Email a confirmation code (accounts **without** a password; `409` otherwise) |
+| POST | `/api/v1/me/email/change` | Bearer | 10 / 10 min | Confirm the learner, then send a code to `new_email` |
+| POST | `/api/v1/me/email/change/confirm` | Bearer | 10 / 10 min | `{ code }` → the email changes |
+| PUT | `/api/v1/me/password` | Bearer | 10 / 10 min | Change the password, or set the first one → `204` |
+| POST | `/api/v1/me/sign-in-methods/google` | Bearer | 10 / 10 min | Link a Google account (`id_token` + confirmation) |
+| DELETE | `/api/v1/me/sign-in-methods/google` | Bearer | – | Unlink it |
+| DELETE | `/api/v1/me/account` | Bearer | 10 / 10 min | Delete the account now → `204` |
+
+```jsonc
+// PATCH /me/profile — absent or null fields stay; phone "" removes the phone
+{ "first_name": "Aziza", "phone": "", "timezone": "Europe/London" }
+
+// GET /me/sign-in-methods, POST /me/email/change/confirm, POST|DELETE /me/sign-in-methods/google → 200
+{
+  "email": "learner@example.com", "email_verified": true,
+  "has_password": true,
+  "email_code": true,                       // a code sent to the email always signs in
+  "reauth_method": "password",              // "password" | "email_code"
+  "google": { "email": "learner@gmail.com", "linked_at": "2026-10-17T09:00:00Z" } // or null
+}
+
+// Confirmation ("reauth") fields, part of every sensitive request below: send the one that applies
+{ "current_password": "…" }   // reauth_method "password"
+{ "code": "123456" }          // reauth_method "email_code" (from POST /me/reauth/code)
+
+// POST /me/email/change
+{ "new_email": "new@example.com", "current_password": "…" }
+// → 200 { "new_email": "new@example.com", "expires_at": "…", "resend_available_at": "…" }
+
+// PUT /me/password
+{ "new_password": "…", "current_password": "…" }
+
+// POST /me/sign-in-methods/google
+{ "id_token": "<Google ID token>", "code": "123456" }
+
+// DELETE /me/account
+{ "confirmation": "DELETE", "current_password": "…" }
+```
+
+Rules (decided for 2.10):
+
+- **Confirmation:** accounts with a password confirm with it (5 tries per 15 min per learner, then
+  `429`); accounts without one confirm with a 6-digit code mailed to the current email (10 min,
+  5 wrong guesses, 60 s between codes, 10 per day). A code is spent when accepted. Codes are bound
+  to their purpose: a confirmation code is never a sign-up or email-change code.
+- **Email change:** the learner is confirmed first, then the new address is checked (`422`
+  `new_email` when another live account has it — also re-checked on confirm). The code goes to the
+  new address; on confirm the email changes, `email_verified` is true, other sessions are signed
+  out, and the old address gets a notice.
+- **Password:** policy 8–128 (auth). Must differ from the current one. Other sessions are signed out;
+  the current one stays. Accounts without a password set their first one here, confirmed by code.
+- **Google:** linking needs confirmation (a linked Google account is a way in); `409` when one is
+  linked already or the Google account belongs to another learner. Unlinking never locks the learner
+  out (the email code always works). Note: Google sign-in (1.01) links a Google account whose email
+  equals the account email automatically, so such an account is linked again on its next Google
+  sign-in.
+- **Account deletion:** `confirmation` must be exactly `DELETE`, plus the confirmation fields.
+  Immediate and final (soft delete, no grace period): every session ends, the email is freed, the
+  password, identities and pending codes/links are removed, and the profile row (name, phone, date
+  of birth) and avatar file are deleted — one transaction for the database part. Not covered yet:
+  cancelling a paid subscription (3.13/5.01) and an audit log entry (1.02 helper) — see PROGRESS.
+- **Profile edit:** only after Profile Setup (`409`, `details.reason: "profile_setup_required"`);
+  same field rules as Profile Setup (names, phone, date of birth 13+, IANA timezone, which may not
+  be empty here). All field errors at once in `details.fields`.
+
+| Case | Status / code | Notes |
+| --- | --- | --- |
+| Wrong/missing password or code, invalid field | `422 VALIDATION_ERROR` | `details.fields.current_password`, `code`, `new_email`, `new_password`, `confirmation`, profile fields |
+| Code requested while the account has a password | `409 CONFLICT` | |
+| Google already linked / owned by another learner | `409 CONFLICT` | |
+| Unlink with nothing linked | `404 NOT_FOUND` | |
+| Too many password tries, codes or requests | `429 RATE_LIMITED` | `details.retry_after_seconds` for the code cooldown |
+| Email or Google not configured | `503 SERVICE_UNAVAILABLE` | |
+| Session ended, account deleted | `401 UNAUTHORIZED` | Access tokens of a deleted account stop working on every endpoint that loads the account |
 
 ### Onboarding — learner (2.02)
 

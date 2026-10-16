@@ -24,6 +24,9 @@ type memData struct {
 	sessions   map[string]Session
 	refresh    map[string]RefreshToken
 	resets     map[string]memReset
+	// My Profile (2.10, memstore_account_test.go).
+	actionCodes []memActionCode
+	deleted     map[string]User
 }
 
 type memCode struct {
@@ -41,6 +44,7 @@ func newMemStore() *memStore {
 	return &memStore{d: &memData{
 		users: map[string]User{}, lastLogin: map[string]time.Time{}, identities: map[string]string{},
 		sessions: map[string]Session{}, refresh: map[string]RefreshToken{}, resets: map[string]memReset{},
+		deleted: map[string]User{},
 	}}
 }
 
@@ -53,6 +57,8 @@ func (d *memData) clone() *memData {
 	c.sessions = cloneMap(d.sessions)
 	c.refresh = cloneMap(d.refresh)
 	c.resets = cloneMap(d.resets)
+	c.actionCodes = append([]memActionCode(nil), d.actionCodes...)
+	c.deleted = cloneMap(d.deleted)
 	return &c
 }
 

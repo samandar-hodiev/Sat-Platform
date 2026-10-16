@@ -50,6 +50,9 @@ func (h *Handler) RegisterRoutes(v1 *gin.RouterGroup, authenticate gin.HandlerFu
 	byUser := func(c *gin.Context) string { return auth.CurrentUser(c).UserID }
 	me.POST("/avatar", middleware.RateLimit(h.limiter, "profile:avatar", avatarUploadLimit, avatarUploadWindow, byUser), h.uploadAvatar)
 	me.DELETE("/avatar", h.removeAvatar)
+	// My Profile (2.10), handler_account.go.
+	me.PATCH("/profile", h.update)
+	me.DELETE("/account", middleware.RateLimit(h.limiter, "profile:delete-account", deleteAccountLimit, deleteAccountWindow, byUser), h.deleteAccount)
 
 	v1.GET("/media/avatars/:user/:file", h.serveAvatar)
 }

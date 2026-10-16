@@ -103,6 +103,7 @@ erDiagram
     auth_sessions ||--o{ auth_refresh_tokens : "rotates"
     users ||--o{ password_reset_tokens : "resets with"
     users ||--o| learner_study_profiles : "answered onboarding"
+    users ||--o{ account_action_codes : "confirms changes with"
 
     users {
         uuid id PK
@@ -195,6 +196,17 @@ erDiagram
         timestamptz used_at
         timestamptz created_at
     }
+    account_action_codes {
+        uuid id PK
+        uuid user_id FK "CASCADE"
+        text purpose "reauth | email_change"
+        text email "where the code went"
+        text code_hash "HMAC, purpose+email bound"
+        int attempts
+        timestamptz expires_at
+        timestamptz used_at
+        timestamptz created_at
+    }
     learner_study_profiles {
         uuid user_id PK "FK users CASCADE"
         smallint target_score "400-1600, x10"
@@ -231,7 +243,7 @@ Sign-in identity of learners and the Owner. Names live in `profiles`, appearance
 | `role` | TEXT NOT NULL `'learner'` | `learner`, `owner`. Owner accounts are seeded/created by an admin process (1.02), never by sign-up. 1.02 extends the CHECK if staff roles are added. |
 | `status` | TEXT NOT NULL `'active'` | `active`, `suspended` (4.03) |
 | `last_login_at` | TIMESTAMPTZ NULL | |
-| `deleted_at` | TIMESTAMPTZ NULL | Account deletion (2.10); the email becomes free |
+| `deleted_at` | TIMESTAMPTZ NULL | Account deletion (2.10, soft delete, immediate). In the same transaction the email becomes `deleted-<id>@deleted.invalid` (frees the address, keeps no personal data), `password_hash` and `email_verified_at` go NULL, identities, reset tokens and action codes are deleted, every session is revoked, and the `profiles` row is deleted. Rows of other modules stay, linked to the pseudonymous user. |
 | `created_at`, `updated_at` | TIMESTAMPTZ | trigger-maintained `updated_at` |
 
 Indexes: `users_email_key` UNIQUE `(email) WHERE deleted_at IS NULL` — look users up with
@@ -305,6 +317,27 @@ HMAC-SHA256 bound to the email, refresh and reset tokens as SHA-256 of 256-bit r
 | `auth_refresh_tokens` | Rotating refresh tokens of a session | PK `token_hash`; locked `FOR UPDATE` during refresh. A used token stays, so its reuse is detected. |
 | `password_reset_tokens` | Password reset links | PK `token_hash`, single use, 1 h. A new request marks the user's earlier unused tokens used. |
 
+### `account_action_codes` — 2.10
+
+One-time codes for changes a signed-in learner makes (My Profile), owned by `api/internal/auth`
+(`repository_account.go`). Kept apart from `email_verification_codes` so a code of one flow can
+never be spent in another; the hash is HMAC-SHA256 bound to purpose **and** email.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | UUID PK | |
+| `user_id` | UUID NOT NULL → `users` CASCADE | |
+| `purpose` | TEXT NOT NULL | `reauth` (sent to the current email to confirm a sensitive change on accounts without a password) or `email_change` (sent to the requested new email) |
+| `email` | TEXT NOT NULL | Where the code was sent; lowercase |
+| `code_hash` | TEXT NOT NULL | 64 hex chars |
+| `attempts` | INTEGER NOT NULL 0 | ≥ 0; 5 wrong guesses lock the code |
+| `expires_at` | TIMESTAMPTZ NOT NULL | 10 min; `> created_at` |
+| `used_at` | TIMESTAMPTZ NULL | Single use |
+| `created_at` | TIMESTAMPTZ NOT NULL | |
+
+Index `(user_id, purpose, created_at DESC)`: newest code (locked `FOR UPDATE` on verify), 60 s
+resend cooldown and 10/day cap per user and purpose.
+
 Expired codes, used tokens and old revoked sessions are not purged yet; a cleanup job is a
 later decision (5.05).
 
@@ -346,6 +379,7 @@ API would reject.
 | 20261012120200 | `create_auth_sessions` (+ `auth_refresh_tokens`) | 1.01 |
 | 20261012120300 | `create_password_reset_tokens` | 1.01 |
 | 20261012150000 | `create_learner_study_profiles` | 2.02 |
+| 20261017100000 | `create_account_action_codes` | 2.10 |
 
 ## Planned entities (PRD §3)
 

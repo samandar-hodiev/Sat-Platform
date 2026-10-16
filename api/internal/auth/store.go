@@ -64,7 +64,32 @@ type Tx interface {
 	CreateResetToken(ctx context.Context, userID, hash string, expiresAt, at time.Time) error
 	ResetTokenByHash(ctx context.Context, hash string) (ResetToken, error)
 	MarkResetTokenUsed(ctx context.Context, hash string, at time.Time) error
+
+	// Account changes by the signed-in learner (My Profile, 2.10; account.go).
+	//
+	// Action codes (account_action_codes): LatestActionCode locks the newest unused code of the
+	// user and purpose.
+	ActionCodeStats(ctx context.Context, userID, purpose string, since time.Time) (lastSentAt *time.Time, sent int, err error)
+	CreateActionCode(ctx context.Context, c ActionCodeRecord) error
+	LatestActionCode(ctx context.Context, userID, purpose string) (StoredActionCode, error)
+	IncrementActionCodeAttempts(ctx context.Context, codeID string) error
+	MarkActionCodeUsed(ctx context.Context, codeID string, at time.Time) error
+	// ChangeEmail sets a new, verified email. ErrEmailTaken when another live account has it.
+	ChangeEmail(ctx context.Context, userID, email string, at time.Time) error
+	// Identity returns the user's linked identity of a provider (ErrNotFound when none).
+	Identity(ctx context.Context, userID, provider string) (Identity, error)
+	// UnlinkIdentity removes it (ErrNotFound when none).
+	UnlinkIdentity(ctx context.Context, userID, provider string) error
+	// RevokeOtherSessions ends every session of the user except keepSessionID.
+	RevokeOtherSessions(ctx context.Context, userID, keepSessionID string, at time.Time) error
+	// DeleteUser soft-deletes the account (users.deleted_at) and removes its sign-in data: the
+	// email is replaced by a placeholder (freeing the address, keeping no personal data), the
+	// password, identities, reset tokens and action codes go, every session is revoked.
+	DeleteUser(ctx context.Context, userID string, at time.Time) error
 }
+
+// ErrEmailTaken: the address belongs to another live account.
+var ErrEmailTaken = errors.New("email already in use")
 
 // UserStatus values. Deleted or suspended accounts cannot sign in.
 const (

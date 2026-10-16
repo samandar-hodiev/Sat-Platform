@@ -112,6 +112,43 @@ func (s *PostgresStore) swapAvatar(ctx context.Context, userID string, key *stri
 	return previous, mapErr(err)
 }
 
+// Update relies on the updated_at trigger; now is used by the memory store only.
+func (s *PostgresStore) Update(ctx context.Context, userID string, in Update, _ time.Time) (Profile, error) {
+	// COALESCE keeps a column when its field is absent; phone '' (clear) becomes NULL.
+	p, err := scanProfile(s.db.QueryRow(ctx, `
+		UPDATE profiles SET
+			first_name    = COALESCE($2, first_name),
+			last_name     = COALESCE($3, last_name),
+			phone         = CASE WHEN $4::text IS NULL THEN phone ELSE NULLIF($4::text, '') END,
+			date_of_birth = COALESCE($5, date_of_birth),
+			timezone      = COALESCE($6, timezone)
+		WHERE user_id = $1 AND profile_completed_at IS NOT NULL
+		RETURNING `+profileColumns,
+		userID, in.FirstName, in.LastName, in.Phone, in.DateOfBirth, in.Timezone))
+	if errors.Is(err, ErrNotFound) {
+		return Profile{}, ErrNotCompleted
+	}
+	return p, mapErr(err)
+}
+
+func (s *PostgresStore) DeleteAccount(ctx context.Context, userID string, also func(pgx.Tx) error) (string, error) {
+	var avatar string
+	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
+		if also != nil {
+			if err := also(tx); err != nil {
+				return err
+			}
+		}
+		err := tx.QueryRow(ctx, `DELETE FROM profiles WHERE user_id = $1 RETURNING COALESCE(avatar_key, '')`, userID).
+			Scan(&avatar)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	})
+	return avatar, mapErr(err)
+}
+
 // mapErr turns "the user does not exist" (FK violation, invalid UUID) into ErrNotFound.
 func mapErr(err error) error {
 	var pgErr *pgconn.PgError

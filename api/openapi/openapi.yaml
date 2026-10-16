@@ -20,6 +20,8 @@ tags:
     description: Learner profile and Profile Setup (2.01). Rules in docs/API.md → Profile.
   - name: onboarding
     description: Learner onboarding answers — goal, schedule, background (2.02). Rules in docs/API.md → Onboarding.
+  - name: account
+    description: My Profile — editing the profile, email, password, sign-in methods, account deletion (2.10). Rules in docs/API.md → My Profile.
 
 components:
   securitySchemes:
@@ -145,6 +147,36 @@ components:
         password_required: { type: boolean, description: Profile Setup must set a password (email account without one). }
         profile_completed: { type: boolean, description: False until Profile Setup is done; clients send the learner to Profile Setup. }
         profile_completed_at: { type: [string, "null"], format: date-time }
+    ReauthFields:
+      type: object
+      description: |
+        Confirms a sensitive change (2.10). Send current_password when the account has a password
+        (reauth_method "password"); otherwise a code from POST /me/reauth/code (reauth_method "email_code").
+      properties:
+        current_password: { type: string, maxLength: 512 }
+        code: { type: string, pattern: "^[0-9]{6}$" }
+    SignInMethods:
+      type: object
+      required: [email, email_verified, has_password, email_code, reauth_method, google]
+      properties:
+        email: { type: string, format: email }
+        email_verified: { type: boolean }
+        has_password: { type: boolean }
+        email_code: { type: boolean, const: true, description: Signing in with a code sent to the email always works. }
+        reauth_method: { type: string, enum: [password, email_code], description: What sensitive changes ask for. }
+        google:
+          type: [object, "null"]
+          description: The linked Google account, or null.
+          required: [email, linked_at]
+          properties:
+            email: { type: [string, "null"], description: Google email when it was linked. }
+            linked_at: { type: string, format: date-time }
+    SignInMethodsEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: "#/components/schemas/SignInMethods" }
     ProfileEnvelope:
       type: object
       required: [success, data]
@@ -547,6 +579,37 @@ paths:
               schema: { $ref: "#/components/schemas/ProfileEnvelope" }
         "401": { $ref: "#/components/responses/AuthError" }
         "403": { $ref: "#/components/responses/AuthError" }
+    patch:
+      tags: [account]
+      operationId: updateMyProfile
+      summary: Edit the profile (My Profile)
+      description: After Profile Setup only (409 reason profile_setup_required before). Absent or null fields stay; phone "" removes the phone. Same rules as Profile Setup.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                first_name: { type: [string, "null"], maxLength: 100 }
+                last_name: { type: [string, "null"], maxLength: 100 }
+                phone: { type: [string, "null"], description: International format, normalized to E.164; "" removes it. }
+                date_of_birth: { type: [string, "null"], format: date, description: At least 13 years old. }
+                timezone: { type: [string, "null"], description: IANA name. }
+      responses:
+        "200":
+          description: The updated profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "409": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
   /api/v1/me/profile/setup:
     put:
       tags: [profile]
@@ -640,6 +703,231 @@ paths:
             image/jpeg:
               schema: { type: string, format: binary }
         "404": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/sign-in-methods:
+    get:
+      tags: [account]
+      operationId: getMySignInMethods
+      summary: How the learner signs in, and what sensitive changes ask for
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      responses:
+        "200":
+          description: Sign-in methods.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignInMethodsEnvelope" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/reauth/code:
+    post:
+      tags: [account]
+      operationId: sendReauthCode
+      summary: Email a confirmation code (accounts without a password)
+      description: 10-minute code, 60 s between codes, 10 per day; 5 requests per learner per 10 minutes. 409 when the account has a password (confirm with it instead).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      responses:
+        "200":
+          description: Code sent to the current email.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [expires_at, resend_available_at]
+                    properties:
+                      expires_at: { type: string, format: date-time }
+                      resend_available_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "409": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/email/change:
+    post:
+      tags: [account]
+      operationId: startEmailChange
+      summary: Ask to change the email (sends a code to the new address)
+      description: The learner is confirmed first (ReauthFields), then the new address is checked (422 new_email when another account has it).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/ReauthFields"
+                - type: object
+                  required: [new_email]
+                  properties:
+                    new_email: { type: string, maxLength: 254 }
+      responses:
+        "200":
+          description: Code sent to new_email.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success: { type: boolean, const: true }
+                  data:
+                    type: object
+                    required: [new_email, expires_at, resend_available_at]
+                    properties:
+                      new_email: { type: string, format: email }
+                      expires_at: { type: string, format: date-time }
+                      resend_available_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/email/change/confirm:
+    post:
+      tags: [account]
+      operationId: confirmEmailChange
+      summary: Confirm the new email with its code
+      description: Makes the new address the account email, signs out every other session, and notifies the old address.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, pattern: "^[0-9]{6}$" }
+      responses:
+        "200":
+          description: Updated sign-in methods (new email).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignInMethodsEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/me/password:
+    put:
+      tags: [account]
+      operationId: changePassword
+      summary: Change the password, or set the first one
+      description: Confirmed with the current password, or with an email code when the account has none. Signs out every other session.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/ReauthFields"
+                - type: object
+                  required: [new_password]
+                  properties:
+                    new_password: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        "204": { description: Password saved. }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/v1/me/sign-in-methods/google:
+    post:
+      tags: [account]
+      operationId: linkGoogle
+      summary: Link a Google account
+      description: id_token from Google Identity Services, plus ReauthFields. 409 when one is linked already or the Google account belongs to another learner.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/ReauthFields"
+                - type: object
+                  required: [id_token]
+                  properties:
+                    id_token: { type: string, maxLength: 8192 }
+      responses:
+        "200":
+          description: Updated sign-in methods.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignInMethodsEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "409": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/AuthError" }
+    delete:
+      tags: [account]
+      operationId: unlinkGoogle
+      summary: Unlink the Google account
+      description: Never locks the learner out — the email code always works.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      responses:
+        "200":
+          description: Updated sign-in methods.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignInMethodsEnvelope" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "404": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/account:
+    delete:
+      tags: [account]
+      operationId: deleteMyAccount
+      summary: Delete the account
+      description: |
+        Immediate and final. Ends every session, frees the email, removes the profile (name, phone,
+        date of birth, avatar) and the sign-in data. Needs confirmation "DELETE" plus ReauthFields.
+        10 requests per learner per 10 minutes.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/ReauthFields"
+                - type: object
+                  required: [confirmation]
+                  properties:
+                    confirmation: { type: string, const: DELETE }
+      responses:
+        "204": { description: Account deleted. }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /api/v1/me/onboarding:
     get:
       tags: [onboarding]

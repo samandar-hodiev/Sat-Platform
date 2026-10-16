@@ -15,7 +15,7 @@ import { GoogleLogo } from "./icons";
 // redirect URLs and no client secret on the web.
 const GIS_SRC = "https://accounts.google.com/gsi/client";
 
-interface GoogleIdApi {
+export interface GoogleIdApi {
   initialize(config: {
     client_id: string;
     callback: (response: { credential?: string }) => void;
@@ -44,7 +44,8 @@ declare global {
 
 let scriptPromise: Promise<GoogleIdApi> | null = null;
 
-function loadGoogleIdentity(): Promise<GoogleIdApi> {
+/** Loads Google Identity Services once; also used to link a Google account (My Profile, 2.10). */
+export function loadGoogleIdentity(): Promise<GoogleIdApi> {
   const ready = window.google?.accounts?.id;
   if (ready) return Promise.resolve(ready);
   scriptPromise ??= new Promise<GoogleIdApi>((resolve, reject) => {

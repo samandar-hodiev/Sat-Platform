@@ -72,6 +72,20 @@ func TestPostgresStore(t *testing.T) {
 		"me":                               TestMe,
 		"google":                           TestGoogleSignIn,
 		"http flow":                        TestHTTPSignUpSignInRefreshMeLogout,
+		// My Profile (2.10), account_test.go.
+		"account: sign-in methods":        TestSignInMethods,
+		"account: reauth password":        TestReauthWithPassword,
+		"account: reauth code":            TestReauthWithCode,
+		"account: codes bound to purpose": TestReauthCodeCannotBeUsedForOtherPurposes,
+		"account: email change":           TestEmailChange,
+		"account: email taken meanwhile":  TestEmailChangeTakenMeanwhileKeepsCode,
+		"account: email change by code":   TestEmailChangeWithoutPasswordUsesCode,
+		"account: change password":        TestChangePassword,
+		"account: first password by code": TestSetFirstPasswordWithCode,
+		"account: link and unlink google": TestLinkAndUnlinkGoogle,
+		"account: delete":                 TestDeleteAccountTx,
+		"account: needs active learner":   TestAccountChangesNeedActiveLearner,
+		"account: http flow":              TestHTTPAccountFlow,
 	}
 	for name, run := range scenarios {
 		t.Run(name, run)
@@ -96,6 +110,34 @@ func TestPostgresStore(t *testing.T) {
 		res := f.signUp(t, "s@example.com")
 		if !res.IsNewUser || res.User.ID == u.ID {
 			t.Fatalf("deleted account must not be reused: %+v", res)
+		}
+	})
+
+	t.Run("account: deletion scrubs the users row (2.10)", func(t *testing.T) {
+		f := newFixture(t)
+		u := f.withPassword(t, "gone@example.com", "correct-password")
+		if err := f.store.LinkIdentity(ctx, u.ID, ProviderGoogle, "sub-gone", "gone@gmail.com", f.now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.svc.SendReauthCode(ctx, u.ID); err == nil {
+			t.Fatal("password account must not get a reauth code")
+		}
+		if err := f.store.InTx(ctx, func(tx Tx) error { return f.svc.DeleteAccountTx(ctx, tx, u.ID) }); err != nil {
+			t.Fatal(err)
+		}
+		var email string
+		var hasPassword, verified, deleted bool
+		var identities, live int
+		if err := pool.QueryRow(context.Background(), `
+			SELECT email, password_hash IS NOT NULL, email_verified_at IS NOT NULL, deleted_at IS NOT NULL,
+			       (SELECT count(*) FROM user_identities WHERE user_id = $1),
+			       (SELECT count(*) FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL)
+			  FROM users WHERE id = $1`, u.ID).Scan(&email, &hasPassword, &verified, &deleted, &identities, &live); err != nil {
+			t.Fatal(err)
+		}
+		if email != "deleted-"+u.ID+"@"+DeletedEmailDomain || hasPassword || verified || !deleted || identities != 0 || live != 0 {
+			t.Fatalf("email=%s password=%v verified=%v deleted=%v identities=%d live sessions=%d",
+				email, hasPassword, verified, deleted, identities, live)
 		}
 	})
 

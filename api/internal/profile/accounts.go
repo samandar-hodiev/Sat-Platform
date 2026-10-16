@@ -24,6 +24,14 @@ func (a AuthAccounts) SetInitialPasswordTx(ctx context.Context, tx pgx.Tx, userI
 	return a.Auth.SetInitialPasswordTx(ctx, auth.PgxTx(tx), userID, password)
 }
 
+func (a AuthAccounts) Reauthenticate(ctx context.Context, userID string, r auth.Reauth) error {
+	return a.Auth.Reauthenticate(ctx, userID, r)
+}
+
+func (a AuthAccounts) DeleteAccountTx(ctx context.Context, tx pgx.Tx, userID string) error {
+	return a.Auth.DeleteAccountTx(ctx, auth.PgxTx(tx), userID)
+}
+
 // GooglePrefiller implements auth.ProfilePrefiller: a new Google learner's name is filled in
 // before Profile Setup (PRD §7). It needs only the store, so auth can be built before this
 // module.
