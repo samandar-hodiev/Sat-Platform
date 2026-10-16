@@ -48,6 +48,7 @@ SAT PLATFORM/
 │   │   │   ├── database/         pgx connection pool
 │   │   │   ├── migrate/          golang-migrate wrapper + file-name validation (0.01)
 │   │   │   ├── logger/           slog (text in dev, JSON in prod)
+│   │   │   ├── imaging/          safe image decode (type from bytes, size limits, EXIF orientation)
 │   │   │   ├── ratelimit/        Limiter interface + in-memory implementation
 │   │   │   └── storage/          ObjectStorage interface + local implementation
 │   │   └── <module>/             one folder per domain, added by its session (auth, users, …)
@@ -169,8 +170,16 @@ analytics, platform settings, audit logs.
 - **Preferences** are stored in a first-party cookie per scope: `sat_learner_appearance` and
   `sat_owner_appearance` (`/owner/*`), so Owner and Learner choices are independent (PRD §21.3).
   Not in `localStorage` (ESLint rule). `useTheme()` from `@/components/theme/ThemeProvider` reads
-  and changes them; `setPreferences()` accepts values loaded from the account — DB sync and the
-  Appearance page are 2.11, wallpaper is 2.11, exam focus mode (no decorations) is 3.08.
+  and changes them; `setPreferences()` accepts values loaded from the account. Account sync
+  (2.11): `PreferencesSync` in the learner layout applies the stored account values on load (the
+  account wins; an account that never saved takes the device's values) and saves later changes
+  via `PATCH /me/preferences`. The cookie stays the device copy, so the first paint never waits
+  for the API. Exam focus mode (no decorations) is 3.08.
+- **Wallpaper (2.11)**: `LearnerShell`'s `background` slot gets `LearnerWallpaper`
+  (`@/features/settings`), a fixed, `aria-hidden`, pointer-events-none layer behind the content on
+  `/app`, `/app/plan*`, `/app/progress*` only. Gallery patterns are inline SVG drawn with tokens
+  (`features/settings/wallpaper/patterns.tsx`), so they follow mode and accent; uploads are served
+  from `/api/v1/media/wallpapers/…`. The exam layout has no shell, so no wallpaper.
 - **UI kit**: `@/components/ui` — Button/`buttonClasses` (for links), IconButton, FormField +
   Input/Textarea/Select (label, hint, error and aria wiring), Checkbox, Radio, ChoiceGroup,
   Switch, Card*, Badge, Avatar, Tabs*, Accordion*, Modal (native `<dialog>`), DropdownMenu*,
@@ -202,7 +211,8 @@ analytics, platform settings, audit logs.
   `loading | unavailable | ready{user, signOut}`. Until the 1.01 web session exists it returns
   `unavailable`: no name is shown and Sign out is disabled. 1.01 replaces only that hook.
 - **Sidebar state**: cookie `sat_learner_sidebar` (`expanded|collapsed`), read on the server so
-  the first paint has the right width. 2.11 may sync it with account preferences.
+  the first paint has the right width. `writeSidebarState()` notifies `useSidebarState()`
+  subscribers, so the account value (2.11 sync) and the Settings switch update the shell.
 - **Focus layout**: `app/(focus)/exam/layout.tsx` — no sidebar, header or decorations, for the
   exam runner (3.08 adds `/exam/[attemptId]`; until then `/exam/*` is not found in that layout).
 - Pages under `/app` and `/exam` are `noindex`.

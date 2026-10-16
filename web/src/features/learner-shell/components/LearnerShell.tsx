@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 
 import { useShellAccount } from "../account";
 import { writeSidebarState, type SidebarState } from "../sidebarState";
+import { useSidebarState } from "../useSidebarState";
 import { LearnerHeader } from "./LearnerHeader";
 import { MobileDrawer } from "./MobileDrawer";
 import { Sidebar } from "./Sidebar";
@@ -11,20 +12,18 @@ import { Sidebar } from "./Sidebar";
 export interface LearnerShellProps {
   /** Read from the cookie on the server so the first paint has the right sidebar width. */
   initialSidebar: SidebarState;
+  /** Decorative layer behind the page content (the dashboard wallpaper, 2.11). */
+  background?: ReactNode;
   children: ReactNode;
 }
 
 /** Learner layout (PRD §10.1): collapsible sidebar, header, main content; drawer below lg. */
-export function LearnerShell({ initialSidebar, children }: LearnerShellProps) {
+export function LearnerShell({ initialSidebar, background, children }: LearnerShellProps) {
   const account = useShellAccount();
-  const [collapsed, setCollapsed] = useState(initialSidebar === "collapsed");
+  const collapsed = useSidebarState(initialSidebar) === "collapsed";
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const toggleSidebar = () => {
-    const next = !collapsed;
-    setCollapsed(next);
-    writeSidebarState(next ? "collapsed" : "expanded");
-  };
+  const toggleSidebar = () => writeSidebarState(collapsed ? "expanded" : "collapsed");
 
   return (
     <div className="flex min-h-dvh bg-canvas text-fg">
@@ -34,9 +33,10 @@ export function LearnerShell({ initialSidebar, children }: LearnerShellProps) {
       >
         Skip to content
       </a>
+      {background}
       <Sidebar collapsed={collapsed} onToggle={toggleSidebar} />
       <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
         <LearnerHeader
           account={account}
           drawerOpen={drawerOpen}

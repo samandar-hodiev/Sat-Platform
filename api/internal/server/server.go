@@ -25,6 +25,7 @@ import (
 	"github.com/samandar-hodiev/sat-platform/api/internal/onboarding"
 	"github.com/samandar-hodiev/sat-platform/api/internal/platform/ratelimit"
 	"github.com/samandar-hodiev/sat-platform/api/internal/platform/storage"
+	"github.com/samandar-hodiev/sat-platform/api/internal/preferences"
 	"github.com/samandar-hodiev/sat-platform/api/internal/profile"
 	"github.com/samandar-hodiev/sat-platform/api/openapi"
 )
@@ -69,7 +70,8 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 		middleware.CORS(cfg.HTTP.CORSAllowedOrigins),
 		// Upload routes get their own body limit; everything else keeps HTTP_MAX_BODY_BYTES.
 		middleware.BodyLimitWithRoutes(cfg.HTTP.MaxBodyBytes, map[string]int64{
-			http.MethodPost + " " + profile.AvatarRoute: profile.AvatarRequestMaxBytes,
+			http.MethodPost + " " + profile.AvatarRoute:        profile.AvatarRequestMaxBytes,
+			http.MethodPost + " " + preferences.WallpaperRoute: preferences.WallpaperRequestMaxBytes,
 		}),
 		middleware.Errors(d.Log),
 	)
@@ -112,6 +114,14 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 			return nil, fmt.Errorf("onboarding module: %w", err)
 		}
 		onboardingModule.RegisterRoutes(v1, authModule.Authenticate())
+
+		preferencesModule, err := preferences.NewModule(preferences.Deps{
+			Log: d.Log, Limiter: d.Limiter, Store: preferences.NewPostgresStore(d.DB), Storage: d.Storage,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("preferences module: %w", err)
+		}
+		preferencesModule.RegisterRoutes(v1, authModule.Authenticate())
 	}
 
 	return r, nil

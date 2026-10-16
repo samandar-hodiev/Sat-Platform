@@ -22,6 +22,8 @@ tags:
     description: Learner onboarding answers — goal, schedule, background (2.02). Rules in docs/API.md → Onboarding.
   - name: account
     description: My Profile — editing the profile, email, password, sign-in methods, account deletion (2.10). Rules in docs/API.md → My Profile.
+  - name: preferences
+    description: Learner appearance settings and dashboard wallpaper (2.11). Rules in docs/API.md → Preferences.
 
 components:
   securitySchemes:
@@ -246,6 +248,44 @@ components:
       properties:
         success: { type: boolean, const: true }
         data: { $ref: "#/components/schemas/Onboarding" }
+    WallpaperChoice:
+      type: object
+      required: [source, gallery_id, custom_url]
+      properties:
+        source: { type: string, enum: [none, gallery, custom] }
+        gallery_id: { type: [string, "null"], enum: [aurora, dots, grid, waves, contours, peaks, null], description: Set only when source is gallery. }
+        custom_url: { type: [string, "null"], description: "The uploaded image of this mode (path on the API origin), also while another source is chosen." }
+    Preferences:
+      type: object
+      required: [theme, accent, density, motion, sidebar_collapsed, wallpaper, stored, updated_at]
+      properties:
+        theme: { type: string, enum: [light, dark, system] }
+        accent: { type: string, enum: [neutral, blue, indigo, violet, teal, rose] }
+        density: { type: string, enum: [comfortable, compact] }
+        motion: { type: string, enum: [system, reduced, full] }
+        sidebar_collapsed: { type: boolean }
+        wallpaper:
+          type: object
+          required: [light, dark, opacity, blur]
+          properties:
+            light: { $ref: "#/components/schemas/WallpaperChoice" }
+            dark: { $ref: "#/components/schemas/WallpaperChoice" }
+            opacity: { type: integer, minimum: 10, maximum: 80, description: Percent the wallpaper shows through the page background. }
+            blur: { type: integer, minimum: 0, maximum: 20, description: Blur radius in CSS pixels. }
+        stored: { type: boolean, description: False while nothing was ever saved (the values are the defaults). }
+        updated_at: { type: [string, "null"], format: date-time }
+    WallpaperChoiceInput:
+      type: object
+      required: [source]
+      properties:
+        source: { type: string, enum: [none, gallery, custom], description: "custom needs an uploaded image of that mode (else 409 wallpaper_not_uploaded)." }
+        gallery_id: { type: string, enum: [aurora, dots, grid, waves, contours, peaks], description: Required with source gallery; not allowed otherwise. }
+    PreferencesEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data: { $ref: "#/components/schemas/Preferences" }
     CheckResult:
       type: object
       required: [status, latency_ms]
@@ -1060,3 +1100,120 @@ paths:
         "401": { $ref: "#/components/responses/AuthError" }
         "403": { $ref: "#/components/responses/AuthError" }
         "409": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/preferences:
+    get:
+      tags: [preferences]
+      operationId: getMyPreferences
+      summary: The learner's appearance settings (defaults with stored=false when never saved)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      responses:
+        "200":
+          description: The preferences.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PreferencesEnvelope" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+    patch:
+      tags: [preferences]
+      operationId: updateMyPreferences
+      summary: Change some appearance settings; fields not sent keep their value
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                theme: { type: string, enum: [light, dark, system] }
+                accent: { type: string, enum: [neutral, blue, indigo, violet, teal, rose] }
+                density: { type: string, enum: [comfortable, compact] }
+                motion: { type: string, enum: [system, reduced, full] }
+                sidebar_collapsed: { type: boolean }
+                wallpaper:
+                  type: object
+                  properties:
+                    light: { $ref: "#/components/schemas/WallpaperChoiceInput" }
+                    dark: { $ref: "#/components/schemas/WallpaperChoiceInput" }
+                    opacity: { type: integer, minimum: 10, maximum: 80 }
+                    blur: { type: integer, minimum: 0, maximum: 20 }
+      responses:
+        "200":
+          description: The updated preferences.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PreferencesEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "409": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+  /api/v1/me/wallpapers/{mode}:
+    post:
+      tags: [preferences]
+      operationId: uploadWallpaper
+      summary: Upload the wallpaper image of a mode and choose it
+      description: JPG, PNG or WebP up to 8 MB in the multipart field "file". Stored as a JPEG of at most 2560 px on the longest side, without metadata; replaces the previous upload of that mode. 20 uploads per learner per hour.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+        - { name: mode, in: path, required: true, schema: { type: string, enum: [light, dark] } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: The preferences with the new custom_url selected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PreferencesEnvelope" }
+        "400": { $ref: "#/components/responses/AuthError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "404": { $ref: "#/components/responses/AuthError" }
+        "413": { $ref: "#/components/responses/AuthError" }
+        "422": { $ref: "#/components/responses/AuthError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [preferences]
+      operationId: removeWallpaper
+      summary: Delete the uploaded image of a mode (falls back to no wallpaper if it was chosen)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientPlatform"
+        - { name: mode, in: path, required: true, schema: { type: string, enum: [light, dark] } }
+      responses:
+        "200":
+          description: The preferences without that upload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PreferencesEnvelope" }
+        "401": { $ref: "#/components/responses/AuthError" }
+        "403": { $ref: "#/components/responses/AuthError" }
+        "404": { $ref: "#/components/responses/AuthError" }
+  /api/v1/media/wallpapers/{user}/{file}:
+    get:
+      tags: [preferences]
+      operationId: getWallpaperImage
+      summary: A stored wallpaper (public, unguessable URL, cached for a year)
+      parameters:
+        - { name: user, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: file, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{32}\\.jpg$" } }
+      responses:
+        "200":
+          description: The image.
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/AuthError" }

@@ -9,4 +9,10 @@ export {
   type NavGroup,
   type NavItem,
 } from "./nav";
-export { SIDEBAR_COOKIE, parseSidebarState, type SidebarState } from "./sidebarState";
+export {
+  SIDEBAR_COOKIE,
+  parseSidebarState,
+  writeSidebarState,
+  type SidebarState,
+} from "./sidebarState";
+export { useSidebarState } from "./useSidebarState";

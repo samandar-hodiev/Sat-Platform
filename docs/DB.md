@@ -136,6 +136,14 @@ erDiagram
         text density "comfortable | compact"
         text motion "system | reduced | full"
         boolean sidebar_collapsed
+        text wallpaper_light_source "none | gallery | custom"
+        text wallpaper_light_gallery_id
+        text wallpaper_light_key "storage key"
+        text wallpaper_dark_source "none | gallery | custom"
+        text wallpaper_dark_gallery_id
+        text wallpaper_dark_key "storage key"
+        smallint wallpaper_opacity "10-80"
+        smallint wallpaper_blur "0-20"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -269,8 +277,9 @@ first has data (Google sign-up prefill, or Profile Setup). A missing row means "
 ### `user_preferences` — 0.01 (read/written by 2.11; Owner appearance by 4.01)
 
 Appearance that follows the account across devices. Values are the web theme attributes from
-0.02. A missing row means all defaults (neutral Light). Wallpaper (2.11) and notification
-settings (2.11/3.14) are added by those sessions as new columns in their own migrations.
+0.02. A missing row means all defaults (neutral Light); the API reports that as `stored: false`.
+Owned by `api/internal/preferences` (2.11). Notification settings (3.14) are added by that
+session as new columns in its own migration.
 
 | Column | Type | Default | Allowed |
 | --- | --- | --- | --- |
@@ -280,7 +289,15 @@ settings (2.11/3.14) are added by those sessions as new columns in their own mig
 | `density` | TEXT | `comfortable` | `comfortable`, `compact` |
 | `motion` | TEXT | `system` | `system`, `reduced`, `full` |
 | `sidebar_collapsed` | BOOLEAN | `false` | |
+| `wallpaper_light_source`, `wallpaper_dark_source` | TEXT | `none` | `none`, `gallery`, `custom` (2.11) |
+| `wallpaper_light_gallery_id`, `wallpaper_dark_gallery_id` | TEXT NULL | | Set exactly when the source is `gallery`; format `^[a-z0-9-]{1,32}$` (the API checks the allow-list) |
+| `wallpaper_light_key`, `wallpaper_dark_key` | TEXT NULL | | Uploaded image `wallpapers/<user-id>/<32 hex>.jpg`; required when the source is `custom`, kept while another source is chosen |
+| `wallpaper_opacity` | SMALLINT | `40` | 10–80 (%; capped so page text keeps a tint of the canvas behind it) |
+| `wallpaper_blur` | SMALLINT | `0` | 0–20 (CSS px) |
 | `created_at`, `updated_at` | TIMESTAMPTZ | | |
+
+Writes go through one `SELECT … FOR UPDATE` per change (`PostgresStore.locked`), so concurrent
+partial updates never lose each other and an upload always learns which file it replaced.
 
 ### `audit_logs` — 0.01 (written by the 1.02 helper, read by 4.07 and 4.02)
 
@@ -380,6 +397,7 @@ API would reject.
 | 20261012120300 | `create_password_reset_tokens` | 1.01 |
 | 20261012150000 | `create_learner_study_profiles` | 2.02 |
 | 20261017100000 | `create_account_action_codes` | 2.10 |
+| 20261017110000 | `add_wallpaper_preferences` (columns on `user_preferences`) | 2.11 |
 
 ## Planned entities (PRD §3)
 

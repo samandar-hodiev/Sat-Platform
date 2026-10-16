@@ -406,3 +406,73 @@ Rules (all field errors come back at once in `details.fields`; earlier-score fie
 Go: other modules read the answers with `onboarding.Module.Service.Get(ctx, userID)` (study plan
 2.05, dashboard 2.04); `onboarding.ProfileService` adapts `profile.Service` (Profile Setup done,
 time zone). Web: `useOnboarding()` from `@/features/onboarding` (one fetch per session, shared).
+
+### Preferences — learner (2.11)
+
+Status: live (`api/internal/preferences`, mounted in `server.NewRouter` after onboarding). Also in
+`openapi.yaml` (tag `preferences`). Learner role only (`403` for other roles). PRD §4.4–4.6, §20
+Appearance. Owns `user_preferences`.
+
+| Method | Path | Auth | Limit | Description |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/me/preferences` | Bearer | – | Appearance settings; the defaults with `stored: false` when never saved |
+| PATCH | `/api/v1/me/preferences` | Bearer | – | Change some settings; fields not sent keep their value |
+| POST | `/api/v1/me/wallpapers/{light\|dark}` | Bearer | 20 / learner / hour | Upload the wallpaper image of a mode (multipart field `file`) and choose it |
+| DELETE | `/api/v1/me/wallpapers/{light\|dark}` | Bearer | – | Delete that mode's uploaded image |
+| GET | `/api/v1/media/wallpapers/{user}/{file}` | – | – | The stored image (public; 128 random bits in the URL; `Cache-Control: immutable`) |
+
+```jsonc
+// GET, PATCH /me/preferences, POST|DELETE /me/wallpapers/{mode} → 200
+{
+  "theme": "system",          // light | dark | system
+  "accent": "teal",           // neutral | blue | indigo | violet | teal | rose
+  "density": "comfortable",   // comfortable | compact
+  "motion": "system",         // system | reduced | full
+  "sidebar_collapsed": false,
+  "wallpaper": {
+    "light": { "source": "custom", "gallery_id": null,
+               "custom_url": "/api/v1/media/wallpapers/<user-id>/<32 hex>.jpg" },
+    "dark":  { "source": "gallery", "gallery_id": "aurora", "custom_url": null },
+    "opacity": 40,            // 10–80: % the wallpaper shows through the page background
+    "blur": 0                 // 0–20 CSS px
+  },
+  "stored": true,             // false: nothing saved yet, these are the defaults
+  "updated_at": "2026-10-17T03:26:22Z" // null while stored is false
+}
+
+// PATCH /me/preferences — any subset
+{ "theme": "dark", "sidebar_collapsed": true,
+  "wallpaper": { "dark": { "source": "gallery", "gallery_id": "waves" }, "opacity": 55 } }
+```
+
+Rules (all field errors come back at once in `details.fields`, nested names such as
+`wallpaper.dark.gallery_id`):
+
+- Appearance values: exactly the lists above (the web theme attributes, 0.02).
+- `wallpaper.<mode>.source`: `none`, `gallery` (needs `gallery_id` from `aurora, dots, grid, waves,
+  contours, peaks`), or `custom` (needs an uploaded image of that mode). `gallery_id` with another
+  source is rejected.
+- One uploaded image per mode. A new upload replaces (and deletes) the old file and selects it.
+  Choosing a gallery pattern or `none` keeps the upload (`custom_url` stays), so the learner can
+  switch back; `DELETE` removes it, and if it was selected the mode falls back to `none`.
+- Upload: JPG, PNG or WebP detected from the bytes (file name and Content-Type ignored), ≤ 8 MB,
+  ≤ 40 MP. Stored as JPEG, at most 2560 px on the longest side (never enlarged), EXIF orientation
+  applied, all metadata dropped, transparency on white (shared pipeline with avatars:
+  `internal/platform/imaging`).
+- `opacity` 10–80 and `blur` 0–20 are shared by both modes. An empty `PATCH` changes nothing.
+- Concurrent writes are serialised by a row lock; no update is lost.
+
+| Case | Status / code | Notes |
+| --- | --- | --- |
+| `source: "custom"` without an upload | `409 CONFLICT` | `details.reason: "wallpaper_not_uploaded"` |
+| Invalid fields, bad image | `422 VALIDATION_ERROR` | `details.fields.<field>`; image errors on `file` |
+| Mode other than `light` / `dark` | `404 NOT_FOUND` | |
+| Upload body over 8 MB + framing | `413 PAYLOAD_TOO_LARGE` | |
+| Malformed JSON, wrong types; not multipart | `400 BAD_REQUEST` | |
+| Session ended / account gone | `401 UNAUTHORIZED` | |
+
+Web: `features/settings` — `PreferencesSync` (in the learner layout) keeps the device cookies
+(`sat_learner_appearance`, `sat_learner_sidebar`) and the account in step: on the first load the
+stored account values win; an account with `stored: false` takes the device's values; later
+changes are saved after a 500 ms pause. `usePreferences()` is the shared account copy;
+`LearnerWallpaper` draws the wallpaper on `/app`, `/app/plan*`, `/app/progress*` only.
